@@ -10,9 +10,10 @@ Simple approach: Let Claude Code do the work.
 
 import asyncio
 import json
+import time
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 from claude_agent_sdk import (
@@ -24,6 +25,9 @@ from claude_agent_sdk import (
 
 from dotenv import load_dotenv, find_dotenv
 load_dotenv(find_dotenv())
+
+if TYPE_CHECKING:
+    from stackbench.telemetry import RunLogger
 
 # Import centralized schemas
 from stackbench.schemas import ExampleValidationResult, DocumentValidationResult
@@ -257,9 +261,25 @@ class ValidationAgent:
                 print(f"   Context: ...{response_text[max(0, json_start-50):json_start+100]}...")
             return None
 
-    async def get_claude_response(self, client: ClaudeSDKClient, prompt: str, logger=None, messages_log_file=None) -> str:
+    async def get_claude_response(
+        self,
+        client: ClaudeSDKClient,
+        prompt: str,
+        logger=None,
+        messages_log_file=None,
+        *,
+        run_logger: Optional["RunLogger"] = None,
+        run_step_id: Optional[str] = None,
+        prompt_name: Optional[str] = None,
+        prompt_metadata: Optional[Dict[str, Any]] = None,
+    ) -> str:
         """Send prompt to Claude and get text response, logging all messages."""
-        # Log the user prompt
+        prompt_metadata = prompt_metadata or {}
+        prompt_label = prompt_name or "prompt"
+        metadata = {"stage": prompt_label}
+        model_name = getattr(getattr(client, "options", None), "model", None)
+        cache_key = None
+
         if messages_log_file:
             user_message_entry = {
                 "timestamp": datetime.now().isoformat(),
@@ -269,45 +289,86 @@ class ValidationAgent:
             with open(messages_log_file, 'a') as f:
                 f.write(json.dumps(user_message_entry) + '\n')
 
-        await client.query(prompt)
+        if run_logger and run_step_id:
+            cache_key = await run_logger.log_prompt_start(
+                step_id=run_step_id,
+                name=prompt_label,
+                prompt=prompt,
+                variables=prompt_metadata,
+                model=model_name,
+                metadata=metadata
+            )
 
+        start_time = time.perf_counter()
         response_text = ""
-        async for message in client.receive_response():
-            if isinstance(message, AssistantMessage):
-                # Log the full assistant message
-                if messages_log_file:
-                    # Convert message blocks to serializable format
-                    message_content = []
-                    for block in message.content:
-                        if isinstance(block, TextBlock):
-                            message_content.append({
-                                "type": "text",
-                                "text": block.text
-                            })
-                            response_text += block.text
-                        else:
-                            # Handle other block types
-                            message_content.append({
-                                "type": type(block).__name__,
-                                "data": str(block)
-                            })
 
-                    assistant_message_entry = {
-                        "timestamp": datetime.now().isoformat(),
-                        "role": "assistant",
-                        "content": message_content
-                    }
-                    with open(messages_log_file, 'a') as f:
-                        f.write(json.dumps(assistant_message_entry) + '\n')
-                else:
-                    # Original behavior when no logger
-                    for block in message.content:
-                        if isinstance(block, TextBlock):
-                            response_text += block.text
+        try:
+            await client.query(prompt)
 
-        return response_text
+            async for message in client.receive_response():
+                if isinstance(message, AssistantMessage):
+                    if messages_log_file:
+                        message_content = []
+                        for block in message.content:
+                            if isinstance(block, TextBlock):
+                                message_content.append({
+                                    "type": "text",
+                                    "text": block.text
+                                })
+                                response_text += block.text
+                            else:
+                                message_content.append({
+                                    "type": type(block).__name__,
+                                    "data": str(block)
+                                })
 
-    async def validate_document(self, extraction_file: Path) -> DocumentValidationResult:
+                        assistant_message_entry = {
+                            "timestamp": datetime.now().isoformat(),
+                            "role": "assistant",
+                            "content": message_content
+                        }
+                        with open(messages_log_file, 'a') as f:
+                            f.write(json.dumps(assistant_message_entry) + '\n')
+                    else:
+                        for block in message.content:
+                            if isinstance(block, TextBlock):
+                                response_text += block.text
+        except Exception as exc:
+            if run_logger and run_step_id and cache_key:
+                latency_ms = int((time.perf_counter() - start_time) * 1000)
+                await run_logger.log_prompt_completion(
+                    step_id=run_step_id,
+                    name=prompt_label,
+                    cache_key=cache_key,
+                    output=None,
+                    model=model_name,
+                    latency_ms=latency_ms,
+                    error=str(exc),
+                    metadata=metadata
+                )
+            raise
+        else:
+            if run_logger and run_step_id and cache_key:
+                latency_ms = int((time.perf_counter() - start_time) * 1000)
+                await run_logger.log_prompt_completion(
+                    step_id=run_step_id,
+                    name=prompt_label,
+                    cache_key=cache_key,
+                    output=response_text,
+                    model=model_name,
+                    latency_ms=latency_ms,
+                    metadata=metadata
+                )
+
+            return response_text
+
+    async def validate_document(
+        self,
+        extraction_file: Path,
+        *,
+        run_logger: Optional["RunLogger"] = None,
+        run_step_id: Optional[str] = None,
+    ) -> DocumentValidationResult:
         """Validate all examples in a document."""
         # Load extraction data
         with open(extraction_file, 'r') as f:
@@ -390,7 +451,20 @@ class ValidationAgent:
                 examples_json=examples_json
             )
 
-            response_text = await self.get_claude_response(client, prompt, logger, messages_log_file)
+            response_text = await self.get_claude_response(
+                client,
+                prompt,
+                logger,
+                messages_log_file,
+                run_logger=run_logger,
+                run_step_id=run_step_id,
+                prompt_name="code_validation",
+                prompt_metadata={
+                    "document": page,
+                    "library": library,
+                    "version": version,
+                },
+            )
 
             # Parse results
             validation_results = self.extract_json_from_response(response_text)
