@@ -14,11 +14,13 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
+from opentelemetry.trace import Status, StatusCode
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeElapsedColumn
 from rich.console import Console
 
 from stackbench.repository import RepositoryManager, RunContext
 from stackbench.cache import CacheManager
+from stackbench.telemetry import RunLogger, get_tracer
 from stackbench.agents import (
     DocumentationExtractionAgent,
     APISignatureValidationAgent,
@@ -71,6 +73,20 @@ class DocumentationValidationPipeline:
 
         # Generate unique run ID
         self.run_id = str(uuid.uuid4())
+
+        run_metadata = {
+            "repo_url": repo_url,
+            "branch": branch,
+            "docs_path": docs_path,
+            "include_folders": include_folders or [],
+            "library": library_name,
+            "library_version": library_version,
+            "num_workers": num_workers,
+        }
+
+        run_dir = self.base_output_dir / self.run_id
+        self.run_logger = RunLogger(run_id=self.run_id, run_dir=run_dir, metadata=run_metadata)
+        self.tracer = get_tracer(__name__)
 
         # Initialize repository manager and cache manager
         self.repo_manager = RepositoryManager(base_data_dir=self.base_output_dir)
@@ -193,80 +209,204 @@ class DocumentationValidationPipeline:
         Returns:
             Dict with results from all stages
         """
+        if not self.run_context:
+            raise RuntimeError("Run context must be initialized before processing documents")
+
         doc_name = doc_file.stem
         start_time = datetime.now()
 
-        # 1. EXTRACTION
-        extraction_agent = DocumentationExtractionAgent(
-            docs_folder=self.docs_folder,
-            output_folder=self.run_context.results_dir / "extraction",
-            repo_root=self.run_context.repo_dir,
-            default_version=self.library_version,
-            num_workers=1,
-            validation_log_dir=self.run_context.run_dir / "validation_logs"
-        )
+        extraction_dir = self.run_context.results_dir / "extraction"
+        api_output_dir = self.run_context.results_dir / "api_validation"
+        code_output_dir = self.run_context.results_dir / "code_validation"
+        clarity_output_dir = self.run_context.results_dir / "clarity_validation"
+        validation_log_dir = self.run_context.run_dir / "validation_logs"
+        repo_dir = self.run_context.repo_dir
 
-        extraction_result = await extraction_agent.process_document(
-            doc_file,
-            library_name=self.library_name
-        )
-
-        # If extraction fails, skip downstream validation
-        if not extraction_result:
-            return {
-                "document": doc_name,
-                "status": "failed",
-                "stage_failed": "extraction",
-                "extraction": None,
-                "api_validation": {"status": "skipped", "reason": "extraction failed"},
-                "code_validation": {"status": "skipped", "reason": "extraction failed"},
-                "clarity_validation": {"status": "skipped", "reason": "extraction failed"}
-            }
-
-        # 2. API VALIDATION
-        extraction_file = self.run_context.results_dir / "extraction" / f"{doc_name}_analysis.json"
-
-        api_agent = APISignatureValidationAgent(
-            extraction_folder=self.run_context.results_dir / "extraction",
-            output_folder=self.run_context.results_dir / "api_validation",
-            num_workers=1,
-            validation_log_dir=self.run_context.run_dir / "validation_logs"
-        )
-
-        api_result = await api_agent.validate_document(extraction_file)
-
-        # 3. CODE VALIDATION
-        code_agent = CodeExampleValidationAgent(
-            extraction_output_folder=self.run_context.results_dir / "extraction",
-            validation_output_folder=self.run_context.results_dir / "code_validation",
-            num_workers=1,
-            validation_log_dir=self.run_context.run_dir / "validation_logs"
-        )
-
-        code_result = await code_agent.validate_document(extraction_file)
-
-        # 4. CLARITY VALIDATION (requires extraction + API + Code)
-        clarity_agent = DocumentationClarityAgent(
-            extraction_folder=self.run_context.results_dir / "extraction",
-            output_folder=self.run_context.results_dir / "clarity_validation",
-            repository_folder=self.run_context.repo_dir,
-            num_workers=1,
-            validation_log_dir=self.run_context.run_dir / "validation_logs"
-        )
-
-        clarity_result = await clarity_agent.analyze_document(extraction_file)
-
-        duration = (datetime.now() - start_time).total_seconds()
-
-        return {
-            "document": doc_name,
-            "status": "success",
-            "duration_seconds": duration,
-            "extraction": extraction_result,
-            "api_validation": api_result,
-            "code_validation": code_result,
-            "clarity_validation": clarity_result
+        document_attributes = {
+            "document.name": doc_name,
+            "document.path": str(doc_file),
+            "run.id": self.run_id,
         }
+
+        with self.tracer.start_as_current_span("stackbench.document", attributes=document_attributes) as document_span:
+            api_result = None
+            code_result = None
+            clarity_result = None
+
+            try:
+                # 1. EXTRACTION
+                extraction_agent = DocumentationExtractionAgent(
+                    docs_folder=self.docs_folder,
+                    output_folder=extraction_dir,
+                    repo_root=repo_dir,
+                    default_version=self.library_version,
+                    num_workers=1,
+                    validation_log_dir=validation_log_dir
+                )
+
+                extraction_step_id = await self.run_logger.start_step(
+                    name="Extraction",
+                    stage="extraction",
+                    document=doc_name,
+                    metadata={"path": str(doc_file)}
+                )
+
+                try:
+                    with self.tracer.start_as_current_span(
+                        "stackbench.document.extraction",
+                        attributes={"document.name": doc_name}
+                    ):
+                        extraction_result = await extraction_agent.process_document(
+                            doc_file,
+                            library_name=self.library_name,
+                            run_logger=self.run_logger,
+                            run_step_id=extraction_step_id
+                        )
+                except Exception as exc:
+                    await self.run_logger.end_step(extraction_step_id, status="failed", error=str(exc))
+                    document_span.record_exception(exc)
+                    document_span.set_status(Status(StatusCode.ERROR, str(exc)))
+                    raise
+                else:
+                    extraction_status = "success" if extraction_result else "failed"
+                    extraction_error = None if extraction_result else "Extraction produced no result"
+                    await self.run_logger.end_step(extraction_step_id, status=extraction_status, error=extraction_error)
+
+                    if not extraction_result:
+                        document_span.set_status(Status(StatusCode.ERROR, "Extraction failed"))
+                        return {
+                            "document": doc_name,
+                            "status": "failed",
+                            "stage_failed": "extraction",
+                            "extraction": None,
+                            "api_validation": {"status": "skipped", "reason": "extraction failed"},
+                            "code_validation": {"status": "skipped", "reason": "extraction failed"},
+                            "clarity_validation": {"status": "skipped", "reason": "extraction failed"}
+                        }
+
+                extraction_file = extraction_dir / f"{doc_name}_analysis.json"
+
+                # 2. API VALIDATION
+                api_step_id = await self.run_logger.start_step(
+                    name="API Validation",
+                    stage="api_validation",
+                    document=doc_name,
+                    metadata={"extraction_file": str(extraction_file)}
+                )
+
+                api_agent = APISignatureValidationAgent(
+                    extraction_folder=extraction_dir,
+                    output_folder=api_output_dir,
+                    num_workers=1,
+                    validation_log_dir=validation_log_dir
+                )
+
+                try:
+                    with self.tracer.start_as_current_span(
+                        "stackbench.document.api_validation",
+                        attributes={"document.name": doc_name}
+                    ):
+                        api_result = await api_agent.validate_document(
+                            extraction_file,
+                            run_logger=self.run_logger,
+                            run_step_id=api_step_id
+                        )
+                except Exception as exc:
+                    await self.run_logger.end_step(api_step_id, status="failed", error=str(exc))
+                    document_span.record_exception(exc)
+                    document_span.set_status(Status(StatusCode.ERROR, str(exc)))
+                    raise
+                else:
+                    api_status = "success" if api_result else "failed"
+                    await self.run_logger.end_step(api_step_id, status=api_status, error=None if api_status == "success" else "API validation produced no result")
+
+                # 3. CODE VALIDATION
+                code_step_id = await self.run_logger.start_step(
+                    name="Code Validation",
+                    stage="code_validation",
+                    document=doc_name,
+                    metadata={"extraction_file": str(extraction_file)}
+                )
+
+                code_agent = CodeExampleValidationAgent(
+                    extraction_output_folder=extraction_dir,
+                    validation_output_folder=code_output_dir,
+                    num_workers=1,
+                    validation_log_dir=validation_log_dir
+                )
+
+                try:
+                    with self.tracer.start_as_current_span(
+                        "stackbench.document.code_validation",
+                        attributes={"document.name": doc_name}
+                    ):
+                        code_result = await code_agent.validate_document(
+                            extraction_file,
+                            run_logger=self.run_logger,
+                            run_step_id=code_step_id
+                        )
+                except Exception as exc:
+                    await self.run_logger.end_step(code_step_id, status="failed", error=str(exc))
+                    document_span.record_exception(exc)
+                    document_span.set_status(Status(StatusCode.ERROR, str(exc)))
+                    raise
+                else:
+                    code_status = "success" if code_result else "failed"
+                    await self.run_logger.end_step(code_step_id, status=code_status, error=None if code_status == "success" else "Code validation produced no result")
+
+                # 4. CLARITY VALIDATION
+                clarity_step_id = await self.run_logger.start_step(
+                    name="Clarity Validation",
+                    stage="clarity_validation",
+                    document=doc_name,
+                    metadata={"extraction_file": str(extraction_file)}
+                )
+
+                clarity_agent = DocumentationClarityAgent(
+                    extraction_folder=extraction_dir,
+                    output_folder=clarity_output_dir,
+                    repository_folder=repo_dir,
+                    num_workers=1,
+                    validation_log_dir=validation_log_dir
+                )
+
+                try:
+                    with self.tracer.start_as_current_span(
+                        "stackbench.document.clarity_validation",
+                        attributes={"document.name": doc_name}
+                    ):
+                        clarity_result = await clarity_agent.analyze_document(
+                            extraction_file,
+                            run_logger=self.run_logger,
+                            run_step_id=clarity_step_id
+                        )
+                except Exception as exc:
+                    await self.run_logger.end_step(clarity_step_id, status="failed", error=str(exc))
+                    document_span.record_exception(exc)
+                    document_span.set_status(Status(StatusCode.ERROR, str(exc)))
+                    raise
+                else:
+                    clarity_status = "success" if clarity_result else "failed"
+                    await self.run_logger.end_step(clarity_step_id, status=clarity_status, error=None if clarity_status == "success" else "Clarity validation produced no result")
+
+                duration = (datetime.now() - start_time).total_seconds()
+                document_span.set_attribute("document.duration_seconds", duration)
+                document_span.set_status(Status(StatusCode.OK))
+
+                return {
+                    "document": doc_name,
+                    "status": "success",
+                    "duration_seconds": duration,
+                    "extraction": extraction_result,
+                    "api_validation": api_result,
+                    "code_validation": code_result,
+                    "clarity_validation": clarity_result
+                }
+
+            except Exception as exc:
+                document_span.record_exception(exc)
+                document_span.set_status(Status(StatusCode.ERROR, str(exc)))
+                raise
 
     async def _worker_with_progress(
         self,
@@ -346,9 +486,7 @@ class DocumentationValidationPipeline:
         """
         overall_start = datetime.now()
 
-        # 0. Check cache first (if not force)
         if not force:
-            # Resolve commit hash first to check cache
             resolved_commit = self.repo_manager.resolve_commit_hash(
                 self.repo_url, self.branch, self.commit
             )
@@ -368,7 +506,16 @@ class DocumentationValidationPipeline:
                 console.print(f"   Cached run directory: {self.base_output_dir / cached_run_id}")
                 console.print(f"   [dim]Use --force to bypass cache and re-run analysis[/dim]")
 
-                # Load cached results
+                await self.run_logger.start_run({
+                    "cache_hit": True,
+                    "resolved_commit": resolved_commit,
+                })
+                await self.run_logger.log_info(
+                    "Cache hit - using existing results",
+                    {"cached_run_id": cached_run_id}
+                )
+                await self.run_logger.complete_run(status="cached")
+
                 cached_run_dir = self.base_output_dir / cached_run_id
                 return {
                     "run_id": cached_run_id,
@@ -384,98 +531,175 @@ class DocumentationValidationPipeline:
         else:
             console.print("\n⚡ Force mode enabled - bypassing cache")
 
-        # 1. Clone repository
-        console.print("\n[cyan]🔄 Cloning repository...[/cyan]")
-        await self.clone_repository()
+        run_started = False
+        run_status = "completed"
+        run_error: Optional[str] = None
+        result: Dict[str, Any] = {}
 
-        # Add run to cache after cloning
-        if self.run_context and self.run_context.doc_commit_hash:
-            self.cache_manager.add_run(
-                run_id=self.run_id,
-                repo_url=self.repo_url,
-                branch=self.branch,
-                doc_commit_hash=self.run_context.doc_commit_hash,
-                docs_path=self.docs_path,
-                include_folders=self.include_folders or [],
-                library_name=self.library_name,
-                library_version=self.library_version,
-                status="in_progress"
-            )
+        try:
+            await self.run_logger.start_run()
+            run_started = True
 
-        # 2. Find all markdown files
-        md_result = self.repo_manager.find_markdown_files(
-            self.run_context,
-            include_folders=self.include_folders
-        )
-        md_files = md_result['files']
-
-        if not md_files:
-            console.print("[red]❌ No markdown files found[/red]")
-            return {
-                "run_id": self.run_id,
-                "status": "failed",
-                "reason": "no markdown files found"
+            run_attributes = {
+                "run.id": self.run_id,
+                "repo.url": self.repo_url,
+                "repo.branch": self.branch,
+                "docs.path": self.docs_path or "",
+                "library.name": self.library_name,
+                "library.version": self.library_version,
+                "pipeline.workers": self.num_workers,
+                "pipeline.force": force,
             }
 
-        # 3. Sort documents by size (longest first)
-        sorted_docs = await self._estimate_and_sort_documents(md_files)
+            with self.tracer.start_as_current_span("stackbench.run", attributes=run_attributes) as run_span:
+                try:
+                    console.print("\n[cyan]🔄 Cloning repository...[/cyan]")
+                    with self.tracer.start_as_current_span("stackbench.clone_repository"):
+                        await self.clone_repository()
 
-        # 4. Create shared document queue
-        document_queue = asyncio.Queue()
-        for doc in sorted_docs:
-            await document_queue.put(doc)
+                    if self.run_context and self.run_context.doc_commit_hash:
+                        self.cache_manager.add_run(
+                            run_id=self.run_id,
+                            repo_url=self.repo_url,
+                            branch=self.branch,
+                            doc_commit_hash=self.run_context.doc_commit_hash,
+                            docs_path=self.docs_path,
+                            include_folders=self.include_folders or [],
+                            library_name=self.library_name,
+                            library_version=self.library_version,
+                            status="in_progress"
+                        )
+                        await self.run_logger.log_info(
+                            "Repository cloned",
+                            {
+                                "repo_dir": str(self.run_context.repo_dir),
+                                "doc_commit_hash": self.run_context.doc_commit_hash,
+                            },
+                        )
+                        run_span.set_attribute("repo.commit", self.run_context.doc_commit_hash)
 
-        console.print(f"\n[bold cyan]🚀 Launching {self.num_workers} workers to process {len(sorted_docs)} documents[/bold cyan]\n")
+                    md_result = self.repo_manager.find_markdown_files(
+                        self.run_context,
+                        include_folders=self.include_folders
+                    )
+                    md_files = md_result['files']
 
-        # 5. Launch worker pool with progress tracking
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TaskProgressColumn(),
-            TimeElapsedColumn(),
-            console=console,
-        ) as progress:
+                    await self.run_logger.log_info(
+                        "Markdown discovery completed",
+                        {
+                            "total_found": md_result['total_found'],
+                            "in_scope": md_result['in_include_folders'],
+                            "filtered_api_reference": md_result['filtered_api_reference'],
+                            "to_validate": len(md_files),
+                        }
+                    )
 
-            # Overall progress task
-            overall_task = progress.add_task(
-                f"[cyan]Processing {len(sorted_docs)} documents",
-                total=len(sorted_docs)
-            )
+                    if not md_files:
+                        message = "No markdown files found"
+                        console.print("[red]❌ No markdown files found[/red]")
+                        run_status = "failed"
+                        run_error = message
+                        await self.run_logger.log_error(message, {"phase": "discovery"})
+                        run_span.set_status(Status(StatusCode.ERROR, message))
+                        if self.run_context:
+                            self.cache_manager.update_run_status(self.run_id, "failed")
+                        return {
+                            "run_id": self.run_id,
+                            "status": "failed",
+                            "reason": "no markdown files found"
+                        }
 
-            # Create progress-aware workers
-            workers = [
-                self._worker_with_progress(worker_id, document_queue, progress, overall_task)
-                for worker_id in range(self.num_workers)
-            ]
+                    sorted_docs = await self._estimate_and_sort_documents(md_files)
+                    await self.run_logger.log_info(
+                        "Document processing order established",
+                        {
+                            "total_documents": len(sorted_docs),
+                            "preview": [doc.name for doc in sorted_docs[:5]],
+                        }
+                    )
 
-            # Wait for all workers to complete
-            worker_results = await asyncio.gather(*workers)
+                    document_queue = asyncio.Queue()
+                    for doc in sorted_docs:
+                        await document_queue.put(doc)
 
-        # 7. Flatten results from all workers
-        all_results = [r for worker in worker_results for r in worker]
+                    console.print(f"\n[bold cyan]🚀 Launching {self.num_workers} workers to process {len(sorted_docs)} documents[/bold cyan]\n")
+                    await self.run_logger.log_info(
+                        "Workers launched",
+                        {"num_workers": self.num_workers, "documents": len(sorted_docs)}
+                    )
 
-        overall_duration = (datetime.now() - overall_start).total_seconds()
+                    with Progress(
+                        SpinnerColumn(),
+                        TextColumn("[progress.description]{task.description}"),
+                        BarColumn(),
+                        TaskProgressColumn(),
+                        TimeElapsedColumn(),
+                        console=console,
+                    ) as progress:
 
-        console.print(f"\n[bold green]✨ Pipeline complete in {overall_duration:.1f}s ({overall_duration/60:.1f}m)[/bold green]")
-        console.print(f"   Documents processed: [green]{len([r for r in all_results if r['status'] == 'success'])}[/green]/{len(all_results)}")
-        console.print(f"   Failed: [red]{len([r for r in all_results if r['status'] == 'failed'])}[/red]")
+                        overall_task = progress.add_task(
+                            f"[cyan]Processing {len(sorted_docs)} documents",
+                            total=len(sorted_docs)
+                        )
 
-        # Mark as complete
-        if self.run_context:
-            self.run_context.mark_analysis_completed()
+                        workers = [
+                            self._worker_with_progress(worker_id, document_queue, progress, overall_task)
+                            for worker_id in range(self.num_workers)
+                        ]
 
-            # Update cache status to completed
-            self.cache_manager.update_run_status(self.run_id, "completed")
+                        worker_results = await asyncio.gather(*workers)
 
-        return {
-            "run_id": self.run_id,
-            "duration_seconds": overall_duration,
-            "num_workers": self.num_workers,
-            "total_documents": len(all_results),
-            "successful": len([r for r in all_results if r['status'] == 'success']),
-            "failed": len([r for r in all_results if r['status'] == 'failed']),
-            "results": all_results,
-            "cached": False,
-            "cache_hit": False
-        }
+                    all_results = [r for worker in worker_results for r in worker]
+
+                    overall_duration = (datetime.now() - overall_start).total_seconds()
+
+                    console.print(f"\n[bold green]✨ Pipeline complete in {overall_duration:.1f}s ({overall_duration/60:.1f}m)[/bold green]")
+                    console.print(f"   Documents processed: [green]{len([r for r in all_results if r['status'] == 'success'])}[/green]/{len(all_results)}")
+                    console.print(f"   Failed: [red]{len([r for r in all_results if r['status'] == 'failed'])}[/red]")
+
+                    if self.run_context:
+                        self.run_context.mark_analysis_completed()
+                        self.cache_manager.update_run_status(self.run_id, "completed")
+
+                    await self.run_logger.log_info(
+                        "Pipeline summary",
+                        {
+                            "duration_seconds": overall_duration,
+                            "documents_total": len(all_results),
+                            "documents_successful": len([r for r in all_results if r['status'] == 'success']),
+                            "documents_failed": len([r for r in all_results if r['status'] == 'failed']),
+                        }
+                    )
+
+                    run_span.set_attribute("results.documents", len(all_results))
+                    run_span.set_attribute("results.successful", len([r for r in all_results if r['status'] == 'success']))
+                    run_span.set_attribute("results.failed", len([r for r in all_results if r['status'] == 'failed']))
+                    run_span.set_status(Status(StatusCode.OK))
+
+                    result = {
+                        "run_id": self.run_id,
+                        "duration_seconds": overall_duration,
+                        "num_workers": self.num_workers,
+                        "total_documents": len(all_results),
+                        "successful": len([r for r in all_results if r['status'] == 'success']),
+                        "failed": len([r for r in all_results if r['status'] == 'failed']),
+                        "results": all_results,
+                        "cached": False,
+                        "cache_hit": False
+                    }
+
+                except Exception as exc:
+                    run_status = "failed"
+                    run_error = str(exc)
+                    run_span.record_exception(exc)
+                    run_span.set_status(Status(StatusCode.ERROR, run_error))
+                    await self.run_logger.log_error(run_error, {"phase": "pipeline"})
+                    if self.run_context:
+                        self.cache_manager.update_run_status(self.run_id, "failed")
+                    raise
+
+        finally:
+            if run_started:
+                await self.run_logger.complete_run(status=run_status, error=run_error)
+
+        return result

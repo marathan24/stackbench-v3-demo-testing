@@ -9,9 +9,10 @@ import json
 import re
 import asyncio
 import textwrap
+import time
 from pathlib import Path
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, TYPE_CHECKING
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -19,6 +20,9 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions, AssistantMessage, TextBlock
+
+if TYPE_CHECKING:
+    from stackbench.telemetry import RunLogger
 
 # Import centralized schemas
 from stackbench.schemas import (
@@ -691,7 +695,12 @@ CRITICAL: Return ONLY the raw JSON output from the tool - no explanations, no fo
         client: ClaudeSDKClient,
         prompt: str,
         logger: Optional[Any],
-        messages_log_file: Optional[Path]
+        messages_log_file: Optional[Path],
+        *,
+        run_logger: Optional["RunLogger"] = None,
+        run_step_id: Optional[str] = None,
+        prompt_name: Optional[str] = None,
+        prompt_metadata: Optional[Dict[str, Any]] = None,
     ) -> str:
         """
         Get response from Claude and log messages.
@@ -705,7 +714,12 @@ CRITICAL: Return ONLY the raw JSON output from the tool - no explanations, no fo
         Returns:
             Response text from Claude
         """
-        # Log the user prompt
+        prompt_metadata = prompt_metadata or {}
+        prompt_label = prompt_name or "prompt"
+        metadata = {"stage": prompt_label}
+        model_name = getattr(getattr(client, "options", None), "model", None)
+        cache_key = None
+
         if messages_log_file:
             user_message_entry = {
                 "timestamp": datetime.now().isoformat(),
@@ -715,43 +729,78 @@ CRITICAL: Return ONLY the raw JSON output from the tool - no explanations, no fo
             with open(messages_log_file, 'a', encoding='utf-8') as f:
                 f.write(json.dumps(user_message_entry) + '\n')
 
-        await client.query(prompt)
+        if run_logger and run_step_id:
+            cache_key = await run_logger.log_prompt_start(
+                step_id=run_step_id,
+                name=prompt_label,
+                prompt=prompt,
+                variables=prompt_metadata,
+                model=model_name,
+                metadata=metadata
+            )
 
+        start_time = time.perf_counter()
         response_text = ""
-        async for message in client.receive_response():
-            if isinstance(message, AssistantMessage):
-                # Log the full assistant message
-                if messages_log_file:
-                    # Convert message blocks to serializable format
-                    message_content = []
-                    for block in message.content:
-                        if isinstance(block, TextBlock):
-                            message_content.append({
-                                "type": "text",
-                                "text": block.text
-                            })
-                            response_text += block.text
-                        else:
-                            # Handle other block types
-                            message_content.append({
-                                "type": type(block).__name__,
-                                "data": str(block)
-                            })
 
-                    assistant_message_entry = {
-                        "timestamp": datetime.now().isoformat(),
-                        "role": "assistant",
-                        "content": message_content
-                    }
-                    with open(messages_log_file, 'a', encoding='utf-8') as f:
-                        f.write(json.dumps(assistant_message_entry) + '\n')
-                else:
-                    # Original behavior when no logger
-                    for block in message.content:
-                        if isinstance(block, TextBlock):
-                            response_text += block.text
+        try:
+            await client.query(prompt)
 
-        return response_text
+            async for message in client.receive_response():
+                if isinstance(message, AssistantMessage):
+                    if messages_log_file:
+                        message_content = []
+                        for block in message.content:
+                            if isinstance(block, TextBlock):
+                                message_content.append({
+                                    "type": "text",
+                                    "text": block.text
+                                })
+                                response_text += block.text
+                            else:
+                                message_content.append({
+                                    "type": type(block).__name__,
+                                    "data": str(block)
+                                })
+
+                        assistant_message_entry = {
+                            "timestamp": datetime.now().isoformat(),
+                            "role": "assistant",
+                            "content": message_content
+                        }
+                        with open(messages_log_file, 'a', encoding='utf-8') as f:
+                            f.write(json.dumps(assistant_message_entry) + '\n')
+                    else:
+                        for block in message.content:
+                            if isinstance(block, TextBlock):
+                                response_text += block.text
+        except Exception as exc:
+            if run_logger and run_step_id and cache_key:
+                latency_ms = int((time.perf_counter() - start_time) * 1000)
+                await run_logger.log_prompt_completion(
+                    step_id=run_step_id,
+                    name=prompt_label,
+                    cache_key=cache_key,
+                    output=None,
+                    model=model_name,
+                    latency_ms=latency_ms,
+                    error=str(exc),
+                    metadata=metadata
+                )
+            raise
+        else:
+            if run_logger and run_step_id and cache_key:
+                latency_ms = int((time.perf_counter() - start_time) * 1000)
+                await run_logger.log_prompt_completion(
+                    step_id=run_step_id,
+                    name=prompt_label,
+                    cache_key=cache_key,
+                    output=response_text,
+                    model=model_name,
+                    latency_ms=latency_ms,
+                    metadata=metadata
+                )
+
+            return response_text
 
     async def analyze_document(self, extraction_file: Path) -> Optional[ClarityValidationOutput]:
         """
