@@ -1,0 +1,507 @@
+{
+  "project_root": "/home/engine/project",
+  "python": {
+    "name": "stackbench (Python Package)",
+    "type": "package",
+    "loc": 7768,
+    "children": [
+      {
+        "name": "__init__.py",
+        "type": "module",
+        "path": "stackbench/__init__.py",
+        "loc": 2,
+        "purpose": "Stackbench - Documentation Quality Validation Tool.",
+        "imports": [],
+        "has_tests": false
+      },
+      {
+        "name": "agents",
+        "type": "subpackage",
+        "path": "stackbench/agents",
+        "loc": 2538,
+        "children": [
+          {
+            "name": "__init__.py",
+            "type": "module",
+            "path": "stackbench/agents/__init__.py",
+            "loc": 57,
+            "purpose": "Agent modules for documentation quality analysis.",
+            "imports": [
+              "stackbench.schemas"
+            ],
+            "has_tests": false
+          },
+          {
+            "name": "api_signature_validation_agent.py",
+            "type": "module",
+            "path": "stackbench/agents/api_signature_validation_agent.py",
+            "loc": 624,
+            "purpose": "API Signature Validation Agent - Validates documented API signatures against actual library implementations.",
+            "imports": [
+              "stackbench.schemas",
+              "stackbench.hooks",
+              "stackbench.hooks",
+              "stackbench.hooks"
+            ],
+            "has_tests": false
+          },
+          {
+            "name": "clarity_agent.py",
+            "type": "module",
+            "path": "stackbench/agents/clarity_agent.py",
+            "loc": 856,
+            "purpose": "Documentation Clarity & Structure Validation Agent",
+            "imports": [
+              "stackbench.schemas",
+              "stackbench.agents.clarity_helpers",
+              "stackbench.hooks.logging",
+              "stackbench.hooks",
+              "stackbench.hooks"
+            ],
+            "has_tests": false
+          },
+          {
+            "name": "clarity_helpers.py",
+            "type": "module",
+            "path": "stackbench/agents/clarity_helpers.py",
+            "loc": 60,
+            "purpose": "Helper functions for clarity validation agent.",
+            "imports": [],
+            "has_tests": false
+          },
+          {
+            "name": "code_example_validation_agent.py",
+            "type": "module",
+            "path": "stackbench/agents/code_example_validation_agent.py",
+            "loc": 444,
+            "purpose": "Code Example Validation Agent - Uses Claude Code to validate extracted code examples.",
+            "imports": [
+              "stackbench.schemas",
+              "stackbench.hooks",
+              "stackbench.hooks"
+            ],
+            "has_tests": false
+          },
+          {
+            "name": "extraction_agent.py",
+            "type": "module",
+            "path": "stackbench/agents/extraction_agent.py",
+            "loc": 497,
+            "purpose": "Documentation Quality Analyzer - Extracts API signatures and code examples from markdown docs.",
+            "imports": [
+              "stackbench.schemas",
+              "stackbench.utils",
+              "stackbench.hooks",
+              "stackbench.hooks"
+            ],
+            "has_tests": false
+          }
+        ]
+      },
+      {
+        "name": "cache",
+        "type": "subpackage",
+        "path": "stackbench/cache",
+        "loc": 197,
+        "children": [
+          {
+            "name": "__init__.py",
+            "type": "module",
+            "path": "stackbench/cache/__init__.py",
+            "loc": 3,
+            "purpose": "Cache management for Stackbench validation runs.",
+            "imports": [
+              "stackbench.cache.manager"
+            ],
+            "has_tests": false
+          },
+          {
+            "name": "manager.py",
+            "type": "module",
+            "path": "stackbench/cache/manager.py",
+            "loc": 194,
+            "purpose": "Cache manager for storing and retrieving validation run metadata.",
+            "imports": [],
+            "has_tests": false
+          }
+        ]
+      },
+      {
+        "name": "cli.py",
+        "type": "module",
+        "path": "stackbench/cli.py",
+        "loc": 652,
+        "purpose": "Stackbench CLI - Documentation Quality Validation Tool",
+        "imports": [
+          "stackbench.pipeline.runner",
+          "stackbench.agents.clarity_agent",
+          "stackbench.walkthroughs.walkthrough_generate_agent",
+          "stackbench.repository",
+          "stackbench.walkthroughs.walkthrough_audit_agent",
+          "stackbench.walkthroughs.walkthrough_generate_agent",
+          "stackbench.walkthroughs.walkthrough_audit_agent",
+          "stackbench.utils.codemap"
+        ],
+        "has_tests": false
+      },
+      {
+        "name": "hooks",
+        "type": "subpackage",
+        "path": "stackbench/hooks",
+        "loc": 1021,
+        "children": [
+          {
+            "name": "__init__.py",
+            "type": "module",
+            "path": "stackbench/hooks/__init__.py",
+            "loc": 25,
+            "purpose": "Hooks for StackBench agents.",
+            "imports": [],
+            "has_tests": false
+          },
+          {
+            "name": "logging.py",
+            "type": "module",
+            "path": "stackbench/hooks/logging.py",
+            "loc": 212,
+            "purpose": "Logging hooks for StackBench agents.",
+            "imports": [],
+            "has_tests": false
+          },
+          {
+            "name": "logging_manager.py",
+            "type": "module",
+            "path": "stackbench/hooks/logging_manager.py",
+            "loc": 77,
+            "purpose": "Logging Manager for StackBench agents.",
+            "imports": [],
+            "has_tests": false
+          },
+          {
+            "name": "manager.py",
+            "type": "module",
+            "path": "stackbench/hooks/manager.py",
+            "loc": 88,
+            "purpose": "Hook Manager for StackBench agents.",
+            "imports": [],
+            "has_tests": false
+          },
+          {
+            "name": "validation.py",
+            "type": "module",
+            "path": "stackbench/hooks/validation.py",
+            "loc": 619,
+            "purpose": "Validation hooks for StackBench agents.",
+            "imports": [
+              "stackbench.schemas",
+              "stackbench.utils"
+            ],
+            "has_tests": false
+          }
+        ],
+        "has_readme": true,
+        "readme_path": "stackbench/hooks/README.md"
+      },
+      {
+        "name": "mcp_servers",
+        "type": "subpackage",
+        "path": "stackbench/mcp_servers",
+        "loc": 671,
+        "children": [
+          {
+            "name": "__init__.py",
+            "type": "module",
+            "path": "stackbench/mcp_servers/__init__.py",
+            "loc": 1,
+            "purpose": "MCP servers for Stackbench agents.",
+            "imports": [],
+            "has_tests": false
+          },
+          {
+            "name": "clarity_scoring_server.py",
+            "type": "module",
+            "path": "stackbench/mcp_servers/clarity_scoring_server.py",
+            "loc": 670,
+            "purpose": "Clarity Scoring MCP Server",
+            "imports": [
+              "stackbench.schemas"
+            ],
+            "has_tests": false
+          }
+        ]
+      },
+      {
+        "name": "pipeline",
+        "type": "subpackage",
+        "path": "stackbench/pipeline",
+        "loc": 358,
+        "children": [
+          {
+            "name": "__init__.py",
+            "type": "module",
+            "path": "stackbench/pipeline/__init__.py",
+            "loc": 3,
+            "purpose": "Pipeline orchestration for documentation validation.",
+            "imports": [],
+            "has_tests": false
+          },
+          {
+            "name": "runner.py",
+            "type": "module",
+            "path": "stackbench/pipeline/runner.py",
+            "loc": 355,
+            "purpose": "Pipeline runner that orchestrates the complete documentation validation workflow.",
+            "imports": [
+              "stackbench.repository",
+              "stackbench.cache",
+              "stackbench.agents"
+            ],
+            "has_tests": false
+          }
+        ]
+      },
+      {
+        "name": "repository",
+        "type": "subpackage",
+        "path": "stackbench/repository",
+        "loc": 413,
+        "children": [
+          {
+            "name": "__init__.py",
+            "type": "module",
+            "path": "stackbench/repository/__init__.py",
+            "loc": 3,
+            "purpose": "Repository management for cloning and organizing documentation analysis runs.",
+            "imports": [],
+            "has_tests": false
+          },
+          {
+            "name": "manager.py",
+            "type": "module",
+            "path": "stackbench/repository/manager.py",
+            "loc": 410,
+            "purpose": "Repository management for cloning and organizing API signature analysis runs.",
+            "imports": [],
+            "has_tests": false
+          }
+        ]
+      },
+      {
+        "name": "schemas.py",
+        "type": "module",
+        "path": "stackbench/schemas.py",
+        "loc": 293,
+        "purpose": "Centralized Pydantic schemas for all StackBench agents.",
+        "imports": [],
+        "has_tests": false
+      },
+      {
+        "name": "utils",
+        "type": "subpackage",
+        "path": "stackbench/utils",
+        "loc": 551,
+        "children": [
+          {
+            "name": "__init__.py",
+            "type": "module",
+            "path": "stackbench/utils/__init__.py",
+            "loc": 13,
+            "purpose": "Utility functions for StackBench.",
+            "imports": [],
+            "has_tests": false
+          },
+          {
+            "name": "codemap.py",
+            "type": "module",
+            "path": "stackbench/utils/codemap.py",
+            "loc": 332,
+            "purpose": "Interactive codebase map and dependency visualization.",
+            "imports": [],
+            "has_tests": false
+          },
+          {
+            "name": "schema_utils.py",
+            "type": "module",
+            "path": "stackbench/utils/schema_utils.py",
+            "loc": 206,
+            "purpose": "Utilities for working with Pydantic schemas.",
+            "imports": [],
+            "has_tests": false
+          }
+        ]
+      },
+      {
+        "name": "walkthroughs",
+        "type": "subpackage",
+        "path": "stackbench/walkthroughs",
+        "loc": 1072,
+        "children": [
+          {
+            "name": "__init__.py",
+            "type": "module",
+            "path": "stackbench/walkthroughs/__init__.py",
+            "loc": 31,
+            "purpose": "Stackbench Walkthroughs - Interactive Documentation Validation",
+            "imports": [],
+            "has_tests": false
+          },
+          {
+            "name": "mcp_server.py",
+            "type": "module",
+            "path": "stackbench/walkthroughs/mcp_server.py",
+            "loc": 335,
+            "purpose": "MCP Server for Walkthrough Execution",
+            "imports": [],
+            "has_tests": false
+          },
+          {
+            "name": "schemas.py",
+            "type": "module",
+            "path": "stackbench/walkthroughs/schemas.py",
+            "loc": 145,
+            "purpose": "Pydantic schemas for walkthrough validation system.",
+            "imports": [],
+            "has_tests": false
+          },
+          {
+            "name": "walkthrough_audit_agent.py",
+            "type": "module",
+            "path": "stackbench/walkthroughs/walkthrough_audit_agent.py",
+            "loc": 288,
+            "purpose": "Walkthrough Audit Agent",
+            "imports": [
+              "stackbench.hooks.logging"
+            ],
+            "has_tests": false
+          },
+          {
+            "name": "walkthrough_generate_agent.py",
+            "type": "module",
+            "path": "stackbench/walkthroughs/walkthrough_generate_agent.py",
+            "loc": 273,
+            "purpose": "Walkthrough Generation Agent",
+            "imports": [
+              "stackbench.hooks.validation",
+              "stackbench.hooks.logging"
+            ],
+            "has_tests": false
+          }
+        ],
+        "has_readme": true,
+        "readme_path": "stackbench/walkthroughs/README.md"
+      }
+    ]
+  },
+  "frontend": {
+    "name": "frontend (React + TypeScript)",
+    "type": "package",
+    "loc": 3275,
+    "children": [
+      {
+        "name": "App.tsx",
+        "type": "component",
+        "path": "frontend/src/App.tsx",
+        "loc": 1318
+      },
+      {
+        "name": "assets",
+        "type": "directory",
+        "path": "frontend/src/assets",
+        "loc": 0,
+        "children": []
+      },
+      {
+        "name": "components",
+        "type": "directory",
+        "path": "frontend/src/components",
+        "loc": 1121,
+        "children": [
+          {
+            "name": "CodeBlockWithValidation.tsx",
+            "type": "component",
+            "path": "frontend/src/components/CodeBlockWithValidation.tsx",
+            "loc": 205
+          },
+          {
+            "name": "GapCard.tsx",
+            "type": "component",
+            "path": "frontend/src/components/GapCard.tsx",
+            "loc": 90
+          },
+          {
+            "name": "MarkdownViewer.tsx",
+            "type": "component",
+            "path": "frontend/src/components/MarkdownViewer.tsx",
+            "loc": 187
+          },
+          {
+            "name": "RunInfo.tsx",
+            "type": "component",
+            "path": "frontend/src/components/RunInfo.tsx",
+            "loc": 68
+          },
+          {
+            "name": "RunSelector.tsx",
+            "type": "component",
+            "path": "frontend/src/components/RunSelector.tsx",
+            "loc": 206
+          },
+          {
+            "name": "Settings.tsx",
+            "type": "component",
+            "path": "frontend/src/components/Settings.tsx",
+            "loc": 105
+          },
+          {
+            "name": "Tabs.tsx",
+            "type": "component",
+            "path": "frontend/src/components/Tabs.tsx",
+            "loc": 48
+          },
+          {
+            "name": "WalkthroughViewer.tsx",
+            "type": "component",
+            "path": "frontend/src/components/WalkthroughViewer.tsx",
+            "loc": 212
+          }
+        ]
+      },
+      {
+        "name": "main.tsx",
+        "type": "module",
+        "path": "frontend/src/main.tsx",
+        "loc": 9
+      },
+      {
+        "name": "services",
+        "type": "directory",
+        "path": "frontend/src/services",
+        "loc": 386,
+        "children": [
+          {
+            "name": "api.ts",
+            "type": "module",
+            "path": "frontend/src/services/api.ts",
+            "loc": 386
+          }
+        ]
+      },
+      {
+        "name": "types",
+        "type": "directory",
+        "path": "frontend/src/types",
+        "loc": 441,
+        "children": [
+          {
+            "name": "index.ts",
+            "type": "module",
+            "path": "frontend/src/types/index.ts",
+            "loc": 441
+          }
+        ]
+      }
+    ]
+  },
+  "total_python_loc": 7768,
+  "total_frontend_loc": 3275
+}

@@ -24,10 +24,12 @@ dependencies = [
     "rich>=13.0.0",
     "typer>=0.9.0",
     "python-dotenv>=1.0.0",
+    "graphviz>=0.20.0",
 ]
 
 [project.scripts]
 stackbench = "stackbench.cli:main"
+sb = "stackbench.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/yourusername/stackbench"
@@ -47,6 +49,7 @@ dev-dependencies = [
 [tool.ruff]
 line-length = 120
 target-version = "py311"
+extend-exclude = ["*.svg", "*.png", "*.json", "*.md"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
