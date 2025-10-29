@@ -212,9 +212,32 @@ For details, see `stackbench/walkthroughs/README.md`
 - Bun or npm (for frontend)
 - Claude Code CLI (for AI agent execution)
 
+## Development Tools
+
+Stackbench includes developer utilities for exploring the codebase:
+
+```bash
+# Display interactive codebase map with annotations
+uv run stackbench dev codemap
+
+# Export code map to JSON
+uv run stackbench dev codemap --json
+
+# Generate dependency graphs (requires graphviz)
+uv run stackbench dev codemap --graphs
+```
+
+The codemap shows:
+- Directory and file structure
+- Lines of code per module
+- Module purpose (from docstrings)
+- Import dependencies
+- Test coverage indicators
+
 ## Learn More
 
-- **Main Documentation**: `CLAUDE.md` - Comprehensive overview of architecture and design
+- **Architecture**: `docs/ARCHITECTURE.md` - Comprehensive system architecture
+- **Code Map**: `docs/CODEMAP.md` - Detailed code structure and cross-references
 - **Feature Plan**: `docs/0-plan.md` - Detailed feature roadmap
 - **Hooks Deep Dive**: `stackbench/hooks/README.md` - Hook system details
 

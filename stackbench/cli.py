@@ -10,14 +10,11 @@ A command-line tool for validating documentation quality by:
 import asyncio
 import uuid
 from pathlib import Path
-from typing import Optional, List
 
 import typer
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
-from rich.table import Table
 from rich.panel import Panel
-from rich import print as rprint
+from rich.table import Table
 
 from stackbench.pipeline.runner import DocumentationValidationPipeline
 
@@ -34,14 +31,14 @@ console = Console()
 def run(
     repo: str = typer.Option(..., "--repo", "-r", help="Git repository URL"),
     branch: str = typer.Option("main", "--branch", "-b", help="Git branch to clone"),
-    commit: Optional[str] = typer.Option(
+    commit: str | None = typer.Option(
         None,
         "--commit",
         "-c",
         help="Git commit hash (optional - if not provided, resolves from branch HEAD)",
     ),
     docs_path: str = typer.Option(..., "--docs-path", "-d", help="Base documentation directory (e.g., 'docs/src')"),
-    include_folders: Optional[str] = typer.Option(
+    include_folders: str | None = typer.Option(
         None,
         "--include-folders",
         "-i",
@@ -49,7 +46,7 @@ def run(
     ),
     library: str = typer.Option(..., "--library", "-l", help="Primary library name (e.g., lancedb, fastapi)"),
     version: str = typer.Option(..., "--version", "-v", help="Library version to test against (e.g., 0.25.2)"),
-    output: Optional[str] = typer.Option(
+    output: str | None = typer.Option(
         None,
         "--output",
         "-o",
@@ -148,9 +145,9 @@ def run(
 async def _run_pipeline(
     repo: str,
     branch: str,
-    commit: Optional[str],
+    commit: str | None,
     docs_path: str,
-    include_folders: Optional[List[str]],
+    include_folders: list[str] | None,
     library: str,
     version: str,
     output_dir: Path,
@@ -182,7 +179,7 @@ async def _run_pipeline(
         border_style="green"
     ))
 
-    console.print(f"\n[bold]📊 Results[/bold]")
+    console.print("\n[bold]📊 Results[/bold]")
     console.print(f"   Duration: [cyan]{result['duration_seconds']:.1f}s ({result['duration_seconds']/60:.1f}m)[/cyan]")
     console.print(f"   Workers: [cyan]{result['num_workers']}[/cyan]")
     console.print(f"   Documents: [green]{result['successful']}[/green] successful, [red]{result['failed']}[/red] failed")
@@ -205,7 +202,6 @@ def rerun_clarity(
     This is useful after updating the clarity agent or MCP scoring server.
     Requires that extraction, API validation, and code validation have already completed.
     """
-    import json
     from stackbench.agents.clarity_agent import DocumentationClarityAgent
 
     console.print("\n[bold cyan]📊 Rerunning Clarity Validation[/bold cyan]\n")
@@ -220,7 +216,6 @@ def rerun_clarity(
 
     # Check required directories exist
     extraction_dir = run_dir / "results" / "extraction"
-    results_dir = run_dir / "results"
     repository_dir = run_dir / "repository"
     output_dir = run_dir / "results" / "clarity_validation"
     validation_log_dir = run_dir / "validation_logs"
@@ -258,7 +253,7 @@ def rerun_clarity(
         summary = asyncio.run(agent.analyze_all_documents())
 
         console.print("\n[bold green]✓ Clarity validation complete![/bold green]")
-        console.print(f"\n[bold]📊 Results:[/bold]")
+        console.print("\n[bold]📊 Results:[/bold]")
         console.print(f"  • Documents analyzed: {summary['total_documents']}")
         console.print(f"  • Average score: {summary['average_clarity_score']:.1f}/10")
         console.print(f"  • Critical issues: {summary['critical_issues']}")
@@ -296,12 +291,12 @@ def walkthrough_generate(
     doc_path: str = typer.Option(..., "--doc-path", "-d", help="Path to documentation file (relative to repo root)"),
     library: str = typer.Option(..., "--library", "-l", help="Primary library name"),
     version: str = typer.Option(..., "--version", "-v", help="Library version"),
-    from_run: Optional[str] = typer.Option(
+    from_run: str | None = typer.Option(
         None,
         "--from-run",
         help="Reuse existing run UUID (from core pipeline)",
     ),
-    repo: Optional[str] = typer.Option(
+    repo: str | None = typer.Option(
         None,
         "--repo",
         "-r",
@@ -339,8 +334,8 @@ def walkthrough_generate(
             --library lancedb \\
             --version 0.25.2
     """
-    from stackbench.walkthroughs.walkthrough_generate_agent import WalkthroughGenerateAgent
     from stackbench.repository import RepositoryManager
+    from stackbench.walkthroughs.walkthrough_generate_agent import WalkthroughGenerateAgent
 
     # Validate: Must have either --from-run OR --repo
     if not from_run and not repo:
@@ -405,7 +400,7 @@ def walkthrough_generate(
             # Generate walkthrough
             asyncio.run(agent.generate_walkthrough(doc_path_full, walkthrough_id))
 
-            console.print(f"\n[bold green]✨ Generation complete![/bold green]")
+            console.print("\n[bold green]✨ Generation complete![/bold green]")
             console.print(f"   Output: [cyan]{walkthrough_dir}[/cyan]")
 
         # Scenario 2: Fresh clone
@@ -466,7 +461,7 @@ def walkthrough_generate(
             # Generate walkthrough
             asyncio.run(agent.generate_walkthrough(doc_path_full, walkthrough_id))
 
-            console.print(f"\n[bold green]✨ Generation complete![/bold green]")
+            console.print("\n[bold green]✨ Generation complete![/bold green]")
             console.print(f"   Run ID: [cyan]{run_id}[/cyan]")
             console.print(f"   Output: [cyan]{walkthrough_dir}[/cyan]")
 
@@ -482,13 +477,13 @@ def walkthrough_audit(
     walkthrough_path: str = typer.Option(..., "--walkthrough", "-w", help="Path to walkthrough JSON file"),
     library: str = typer.Option(..., "--library", "-l", help="Library name"),
     version: str = typer.Option(..., "--version", "-v", help="Library version"),
-    output: Optional[str] = typer.Option(
+    output: str | None = typer.Option(
         None,
         "--output",
         "-o",
         help="Output directory (default: same as walkthrough)",
     ),
-    working_dir: Optional[str] = typer.Option(
+    working_dir: str | None = typer.Option(
         None,
         "--working-dir",
         help="Working directory for execution (default: temp dir)",
@@ -607,13 +602,13 @@ def walkthrough_run(
     doc_path: str = typer.Option(..., "--doc-path", "-d", help="Path to documentation file or folder"),
     library: str = typer.Option(..., "--library", "-l", help="Primary library name"),
     version: str = typer.Option(..., "--version", "-v", help="Library version"),
-    output: Optional[str] = typer.Option(
+    output: str | None = typer.Option(
         None,
         "--output",
         "-o",
         help="Output directory (default: ./data/wt_<UUID>)",
     ),
-    working_dir: Optional[str] = typer.Option(
+    working_dir: str | None = typer.Option(
         None,
         "--working-dir",
         help="Working directory for audit execution (default: temp dir)",
@@ -630,8 +625,8 @@ def walkthrough_run(
             --library lancedb \\
             --version 0.25.2
     """
-    from stackbench.walkthroughs.walkthrough_generate_agent import WalkthroughGenerateAgent
     from stackbench.walkthroughs.walkthrough_audit_agent import WalkthroughAuditAgent
+    from stackbench.walkthroughs.walkthrough_generate_agent import WalkthroughGenerateAgent
 
     # Generate walkthrough ID
     walkthrough_id = f"wt_{uuid.uuid4().hex[:8]}"
@@ -672,10 +667,10 @@ def walkthrough_run(
             walkthrough_export = asyncio.run(generate_agent.generate_walkthrough(doc_path_obj, walkthrough_id))
             walkthrough_file = output_dir / f"{walkthrough_id}.json"
         else:
-            console.print(f"[red]❌ Full pipeline only supports single file. Use 'generate' for folders.[/red]")
+            console.print("[red]❌ Full pipeline only supports single file. Use 'generate' for folders.[/red]")
             raise typer.Exit(1)
 
-        console.print(f"[green]✅ Walkthrough generated[/green]")
+        console.print("[green]✅ Walkthrough generated[/green]")
 
         # Phase 2: Audit
         console.print("\n[bold cyan]🔍 Phase 2: Auditing Walkthrough[/bold cyan]")
@@ -698,7 +693,7 @@ def walkthrough_run(
             border_style="green"
         ))
 
-        console.print(f"\n[bold]📊 Final Summary[/bold]")
+        console.print("\n[bold]📊 Final Summary[/bold]")
         summary_table = Table(show_header=True, header_style="bold cyan")
         summary_table.add_column("Metric")
         summary_table.add_column("Value", justify="right")
@@ -716,6 +711,125 @@ def walkthrough_run(
     except Exception as e:
         console.print(f"\n[red]❌ Error: {e}[/red]")
         raise typer.Exit(1)
+
+
+# ============================================================================
+# DEVELOPMENT COMMANDS
+# ============================================================================
+
+dev_app = typer.Typer(
+    name="dev",
+    help="Development utilities and codebase exploration tools",
+)
+app.add_typer(dev_app, name="dev")
+
+
+@dev_app.command("codemap")
+def dev_codemap(
+    details: bool = typer.Option(
+        True,
+        "--details/--no-details",
+        "-d/-D",
+        help="Show detailed annotations (purpose, imports, tests)",
+    ),
+    export_json: bool = typer.Option(
+        False,
+        "--json",
+        "-j",
+        help="Export code map to JSON file",
+    ),
+    graphs: bool = typer.Option(
+        False,
+        "--graphs",
+        "-g",
+        help="Generate dependency graphs (requires graphviz)",
+    ),
+):
+    """
+    Display interactive codebase map with annotations.
+
+    Shows:
+    - Directory structure
+    - Lines of code per module
+    - Module purpose (from docstrings)
+    - Dependencies (imports)
+    - Test coverage indicators
+
+    Example:
+        stackbench dev codemap
+        stackbench dev codemap --no-details
+        stackbench dev codemap --json --graphs
+    """
+    from pathlib import Path
+
+    from stackbench.utils.codemap import (
+        CodeMapGenerator,
+        generate_dependency_graph_frontend,
+        generate_dependency_graph_python,
+    )
+
+    project_root = Path.cwd()
+    generator = CodeMapGenerator(project_root)
+
+    console.print("\n[bold cyan]📊 Stackbench Code Map[/bold cyan]\n")
+
+    # Generate and display Python tree
+    console.print("[bold]Python Package (stackbench/)[/bold]")
+    python_tree = generator.generate_python_tree()
+    generator.print_tree(python_tree, show_details=details)
+
+    console.print(
+        f"\n[bold]Total Python LOC:[/bold] [yellow]{python_tree['loc']}[/yellow]\n"
+    )
+
+    # Generate and display frontend tree
+    frontend_tree = generator.generate_frontend_tree()
+    if frontend_tree:
+        console.print("[bold]Frontend (frontend/src/)[/bold]")
+        generator.print_tree(frontend_tree, show_details=details)
+        console.print(
+            f"\n[bold]Total Frontend LOC:[/bold] [yellow]{frontend_tree['loc']}[/yellow]\n"
+        )
+
+    # Export to JSON if requested
+    if export_json:
+        json_path = project_root / "docs" / "codemap.json"
+        data = generator.export_json(json_path)
+        console.print(f"[green]✓[/green] Exported code map to: [cyan]{json_path}[/cyan]")
+        console.print(
+            f"  Total Python LOC: [yellow]{data['total_python_loc']}[/yellow]"
+        )
+        console.print(
+            f"  Total Frontend LOC: [yellow]{data['total_frontend_loc']}[/yellow]"
+        )
+
+    # Generate dependency graphs if requested
+    if graphs:
+        console.print("\n[bold]Generating dependency graphs...[/bold]")
+
+        python_graph_path = project_root / "docs" / "python_dependencies"
+        try:
+            generate_dependency_graph_python(python_graph_path)
+            console.print("[green]✓[/green] Python dependency graphs generated")
+        except Exception as e:
+            console.print(f"[yellow]⚠[/yellow] Failed to generate Python graph: {e}")
+
+        frontend_graph_path = project_root / "docs" / "frontend_dependencies"
+        try:
+            generate_dependency_graph_frontend(frontend_graph_path)
+            console.print("[green]✓[/green] Frontend dependency graphs generated")
+        except Exception as e:
+            console.print(f"[yellow]⚠[/yellow] Failed to generate frontend graph: {e}")
+
+    # Summary
+    console.print("\n[bold]📁 Documentation Files:[/bold]")
+    console.print("  • [cyan]docs/ARCHITECTURE.md[/cyan] - System architecture overview")
+    console.print("  • [cyan]docs/CODEMAP.md[/cyan] - Detailed code structure")
+    if export_json:
+        console.print("  • [cyan]docs/codemap.json[/cyan] - Machine-readable code map")
+    if graphs:
+        console.print("  • [cyan]docs/python_dependencies.png/svg[/cyan] - Python module graph")
+        console.print("  • [cyan]docs/frontend_dependencies.png/svg[/cyan] - Frontend component graph")
 
 
 def main():
