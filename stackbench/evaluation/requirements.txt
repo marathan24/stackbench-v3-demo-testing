@@ -1,0 +1,14 @@
+# Requirements for evaluation module
+
+# Core dependencies
+numpy>=1.24.0  # For statistical calculations (variance, percentiles, correlations)
+pydantic>=2.0.0  # For data validation (already in main requirements)
+
+# Optional dependencies for advanced features
+# scipy>=1.10.0  # For p-value calculations, t-tests (optional)
+# pandas>=2.0.0  # For data manipulation in outcome studies (optional)
+# matplotlib>=3.7.0  # For visualization of trends (optional)
+# seaborn>=0.12.0  # For pretty plots (optional)
+
+# Note: Most dependencies are already in main stackbench requirements
+# Only numpy is strictly required for evaluation module
