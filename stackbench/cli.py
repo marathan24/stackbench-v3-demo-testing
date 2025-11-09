@@ -718,6 +718,397 @@ def walkthrough_run(
         raise typer.Exit(1)
 
 
+# ============================================================================
+# README.LLM COMMANDS
+# ============================================================================
+
+readme_llm_app = typer.Typer(
+    name="readme-llm",
+    help="Generate LLM-optimized documentation (README.LLM system)",
+)
+app.add_typer(readme_llm_app, name="readme-llm")
+
+
+@readme_llm_app.command("generate")
+def readme_llm_generate(
+    docs_path: str = typer.Option(..., "--docs-path", "-d", help="Path to documentation directory"),
+    library: str = typer.Option(..., "--library", "-l", help="Library name (e.g., lancedb)"),
+    version: str = typer.Option(..., "--version", "-v", help="Library version (e.g., 0.25.2)"),
+    languages: Optional[str] = typer.Option(
+        None,
+        "--languages",
+        help="Comma-separated languages (e.g., python,typescript). Auto-detected if omitted.",
+    ),
+    output_format: str = typer.Option(
+        "both",
+        "--output-format",
+        "-f",
+        help="Output format: monolithic (README.LLM), knowledge_base (JSON), or both (default: both)",
+    ),
+    max_contexts: int = typer.Option(
+        50,
+        "--max-contexts",
+        help="Maximum API contexts in README.LLM (default: 50)",
+    ),
+    output: Optional[str] = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Output directory (default: ./data/<run-id>/readme_llm)",
+    ),
+):
+    """
+    Generate README.LLM from documentation (standalone mode).
+
+    This command processes documentation to create LLM-optimized outputs:
+    - README.LLM: Monolithic XML file with interleaved API + examples
+    - knowledge_base/: Structured JSON for DocuMentor MCP server
+
+    The system will:
+    1. Scan documentation for code examples
+    2. Auto-detect programming languages (or use --languages)
+    3. Introspect the library to discover APIs
+    4. Match code examples to APIs
+    5. Generate README.LLM and/or knowledge base
+
+    Example (auto-detect languages):
+        stackbench readme-llm generate \\
+            --docs-path docs/src \\
+            --library lancedb \\
+            --version 0.25.2
+
+    Example (specify languages):
+        stackbench readme-llm generate \\
+            --docs-path docs/src \\
+            --library lancedb \\
+            --version 0.25.2 \\
+            --languages python,typescript \\
+            --output-format both
+    """
+    try:
+        console.print("\n[bold cyan]📚 README.LLM Generation[/bold cyan]")
+        console.print(f"Library: [yellow]{library} {version}[/yellow]")
+        console.print(f"Documentation: [cyan]{docs_path}[/cyan]")
+
+        # Parse languages
+        language_list = None
+        if languages:
+            language_list = [lang.strip() for lang in languages.split(",")]
+            console.print(f"Languages: [green]{', '.join(language_list)}[/green]")
+        else:
+            console.print(f"Languages: [yellow]Auto-detect[/yellow]")
+
+        # Validate output format
+        if output_format not in ("monolithic", "knowledge_base", "both"):
+            console.print(f"[red]Error: Invalid output format '{output_format}'[/red]")
+            console.print("Valid options: monolithic, knowledge_base, both")
+            raise typer.Exit(1)
+
+        # Import generator
+        from stackbench.readme_llm import ReadMeLLMGenerator
+
+        # Create generator
+        generator = ReadMeLLMGenerator(
+            docs_path=Path(docs_path),
+            library_name=library,
+            library_version=version,
+            output_dir=Path(output) if output else None,
+            languages=language_list,
+            generation_mode="standalone"
+        )
+
+        console.print("\n[bold]Starting generation pipeline...[/bold]\n")
+
+        # Run generation
+        with console.status("[bold green]Processing...") as status:
+            result = generator.generate(
+                output_format=output_format,
+                max_contexts=max_contexts
+            )
+
+        # Display results
+        console.print("\n[bold green]✅ Generation Complete![/bold green]\n")
+
+        summary_table = Table(show_header=True, header_style="bold cyan")
+        summary_table.add_column("Metric")
+        summary_table.add_column("Value", justify="right")
+
+        summary_table.add_row("Library", f"{result.library_name} {result.library_version}")
+        summary_table.add_row("Languages", ", ".join(result.languages))
+        summary_table.add_row("Total APIs", str(result.total_apis))
+        summary_table.add_row("Total Examples", str(result.total_examples))
+        summary_table.add_row("Generation Mode", result.generation_mode)
+
+        for lang, count in result.apis_by_language.items():
+            summary_table.add_row(f"  {lang.capitalize()} APIs", str(count))
+
+        console.print(summary_table)
+
+        if result.readme_llm_path:
+            console.print(f"\n📄 README.LLM: [cyan]{result.readme_llm_path}[/cyan]")
+
+        if result.knowledge_base_path:
+            console.print(f"📁 Knowledge Base: [cyan]{result.knowledge_base_path}[/cyan]")
+
+        console.print(f"\n[dim]Run ID: {result.run_id}[/dim]")
+
+    except Exception as e:
+        console.print(f"\n[red]❌ Error: {e}[/red]")
+        import traceback
+        traceback.print_exc()
+        raise typer.Exit(1)
+
+
+@readme_llm_app.command("mcp")
+def readme_llm_mcp_serve(
+    knowledge_base: str = typer.Option(
+        ...,
+        "--knowledge-base-path",
+        "-k",
+        help="Path to knowledge_base/ directory",
+    ),
+    search_mode: str = typer.Option(
+        "hybrid",
+        "--search-mode",
+        "-m",
+        help="Search mode: keyword (fast, exact) or hybrid (keyword + semantic)",
+    ),
+    vector_model: Optional[str] = typer.Option(
+        None,
+        "--vector-model",
+        help="Sentence-transformer model (default: all-MiniLM-L6-v2)",
+    ),
+):
+    """
+    Start DocuMentor MCP server (stdio mode).
+
+    The MCP server provides LLM-friendly tools to interact with the README.LLM
+    knowledge base:
+
+    Tools:
+    - get_library_overview: Retrieve library metadata
+    - find_api: Search for APIs
+    - get_examples: Search for code examples
+    - report_issue: Collect user feedback
+
+    Search Modes:
+    - keyword: Fast TF-IDF-based search with exact matching
+    - hybrid: Combines keyword + semantic (sentence-transformers) search
+
+    Example (hybrid mode):
+        stackbench readme-llm mcp \\
+            --knowledge-base-path data/run_abc123/readme_llm/knowledge_base \\
+            --search-mode hybrid
+
+    Example (keyword-only mode):
+        stackbench readme-llm mcp \\
+            --knowledge-base-path data/run_abc123/readme_llm/knowledge_base \\
+            --search-mode keyword
+
+    The server runs in stdio mode for MCP communication.
+    """
+    try:
+        console.print("\n[bold cyan]🔌 Starting DocuMentor MCP Server[/bold cyan]")
+        console.print(f"Knowledge Base: [cyan]{knowledge_base}[/cyan]")
+        console.print(f"Search Mode: [yellow]{search_mode}[/yellow]")
+
+        # Validate search mode
+        if search_mode not in ["keyword", "hybrid"]:
+            console.print(f"[red]Error: Invalid search mode '{search_mode}'[/red]")
+            console.print("Valid modes: keyword, hybrid")
+            raise typer.Exit(1)
+
+        # Validate knowledge base path
+        kb_path = Path(knowledge_base)
+        if not kb_path.exists():
+            console.print(f"[red]Error: Knowledge base not found: {kb_path}[/red]")
+            raise typer.Exit(1)
+
+        # Import server
+        from stackbench.readme_llm.mcp_servers.documentor_server import DocuMentorServer
+        import asyncio
+
+        if vector_model:
+            console.print(f"Vector Model: [cyan]{vector_model}[/cyan]")
+
+        console.print("\n[dim]Server starting in stdio mode...[/dim]")
+        console.print("[dim]Use Ctrl+C to stop the server[/dim]\n")
+
+        # Create and run server
+        server = DocuMentorServer(
+            kb_path,
+            search_mode=search_mode,
+            vector_model=vector_model
+        )
+        asyncio.run(server.run())
+
+    except KeyboardInterrupt:
+        console.print("\n\n[yellow]Server stopped by user[/yellow]")
+    except Exception as e:
+        console.print(f"\n[red]❌ Error: {e}[/red]")
+        import traceback
+        traceback.print_exc()
+        raise typer.Exit(1)
+
+
+@readme_llm_app.command("analyze-feedback")
+def readme_llm_analyze_feedback(
+    feedback_file: str = typer.Option(
+        ...,
+        "--feedback-file",
+        "-f",
+        help="Path to feedback.jsonl file",
+    ),
+    output: Optional[str] = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Path to save report JSON (optional)",
+    ),
+    show_details: bool = typer.Option(
+        False,
+        "--show-details",
+        help="Show detailed issue list in terminal",
+    ),
+):
+    """
+    Analyze user feedback collected via DocuMentor MCP server.
+
+    This command processes feedback issues to:
+    - Identify patterns (frequently reported APIs/examples)
+    - Prioritize issues by severity and frequency
+    - Generate actionable recommendations
+    - Export comprehensive report
+
+    Example:
+        stackbench readme-llm analyze-feedback \\
+            --feedback-file data/run_abc123/readme_llm/feedback.jsonl \\
+            --output feedback_report.json \\
+            --show-details
+
+    The feedback file is generated when users call the report_issue tool
+    through the MCP server.
+    """
+    try:
+        console.print("\n[bold cyan]📊 Analyzing Feedback[/bold cyan]")
+        console.print(f"Feedback File: [cyan]{feedback_file}[/cyan]")
+
+        # Validate feedback file
+        fb_path = Path(feedback_file)
+        if not fb_path.exists():
+            console.print(f"[red]Error: Feedback file not found: {fb_path}[/red]")
+            raise typer.Exit(1)
+
+        # Import analyzer
+        from stackbench.readme_llm.mcp_servers.feedback_analyzer import FeedbackAnalyzer
+
+        console.print("\n[dim]Loading and analyzing feedback...[/dim]\n")
+
+        # Create analyzer
+        analyzer = FeedbackAnalyzer(fb_path)
+        report = analyzer.generate_report()
+
+        # Display summary
+        console.print("[bold]📈 Summary[/bold]\n")
+
+        summary_table = Table(show_header=True, header_style="bold cyan")
+        summary_table.add_column("Metric")
+        summary_table.add_column("Value", justify="right")
+
+        summary = report["summary"]
+        summary_table.add_row("Total Issues", str(summary["total_issues"]))
+
+        if summary["total_issues"] > 0:
+            summary_table.add_row("", "")  # Spacer
+
+            # By severity
+            for severity, count in summary["by_severity"].items():
+                color = {
+                    "critical": "red",
+                    "high": "yellow",
+                    "medium": "blue",
+                    "low": "dim"
+                }.get(severity, "white")
+                summary_table.add_row(f"  {severity.capitalize()}", f"[{color}]{count}[/{color}]")
+
+            summary_table.add_row("", "")  # Spacer
+
+            # By type
+            for issue_type, count in summary["by_type"].items():
+                summary_table.add_row(f"  {issue_type.replace('_', ' ').title()}", str(count))
+
+        console.print(summary_table)
+
+        # Display recommendations
+        if report["recommendations"]:
+            console.print("\n[bold]💡 Recommendations[/bold]\n")
+            for rec in report["recommendations"]:
+                console.print(f"  {rec}")
+
+        # Display patterns
+        if report["patterns"]:
+            console.print("\n[bold]🔍 Patterns Identified[/bold]\n")
+            for i, pattern in enumerate(report["patterns"][:5], 1):  # Top 5
+                console.print(f"  {i}. {pattern['description']} ([yellow]{pattern['count']} issues[/yellow])")
+
+        # Display top priorities
+        if report["priorities"]:
+            console.print("\n[bold]⚡ Top Priority Issues[/bold]\n")
+
+            priorities_table = Table(show_header=True, header_style="bold cyan")
+            priorities_table.add_column("Issue ID", width=20)
+            priorities_table.add_column("Type", width=20)
+            priorities_table.add_column("Severity", width=10)
+            priorities_table.add_column("Score", justify="right", width=8)
+            priorities_table.add_column("Description", width=60)
+
+            for priority in report["priorities"][:10]:  # Top 10
+                issue = priority["issue"]
+                score = priority["priority_score"]
+
+                severity_color = {
+                    "critical": "red",
+                    "high": "yellow",
+                    "medium": "blue",
+                    "low": "dim"
+                }.get(issue["severity"], "white")
+
+                priorities_table.add_row(
+                    issue["issue_id"],
+                    issue["issue_type"].replace("_", " ").title(),
+                    f"[{severity_color}]{issue['severity']}[/{severity_color}]",
+                    str(score),
+                    issue["description"][:60] + ("..." if len(issue["description"]) > 60 else "")
+                )
+
+            console.print(priorities_table)
+
+        # Show detailed issues if requested
+        if show_details and report["summary"]["total_issues"] > 0:
+            console.print("\n[bold]📋 All Issues[/bold]\n")
+            for issue in analyzer.issues[:20]:  # Limit to 20 in terminal
+                console.print(f"  [{issue.severity}] {issue.issue_type}: {issue.description[:80]}")
+                if issue.api_id:
+                    console.print(f"    API: [cyan]{issue.api_id}[/cyan]")
+                if issue.example_id:
+                    console.print(f"    Example: [cyan]{issue.example_id}[/cyan]")
+                console.print()
+
+        # Export report if output specified
+        if output:
+            output_path = Path(output)
+            analyzer.export_report(output_path)
+            console.print(f"\n[bold green]✅ Report exported to:[/bold green] [cyan]{output_path}[/cyan]")
+        else:
+            console.print("\n[dim]Tip: Use --output to save the full report as JSON[/dim]")
+
+    except Exception as e:
+        console.print(f"\n[red]❌ Error: {e}[/red]")
+        import traceback
+        traceback.print_exc()
+        raise typer.Exit(1)
+
+
 def main():
     """Entry point for the CLI."""
     app()

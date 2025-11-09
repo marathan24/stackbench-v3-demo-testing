@@ -5,6 +5,11 @@ Clarity Scoring MCP Server
 Provides deterministic scoring and improvement roadmap generation for documentation clarity validation.
 Separates quantitative scoring (this server) from qualitative analysis (clarity agent).
 
+Scoring Algorithm:
+- Calculate 5 dimensional scores (each 0-10)
+- Overall score = average of dimension scores
+- TIER CONSTRAINT: Critical issues or failed examples automatically cap score at 7.9 (max Tier B)
+
 Tools:
 1. get_rubric - Returns scoring rubric and criteria
 2. calculate_clarity_score - Computes overall and dimensional scores
@@ -19,6 +24,17 @@ from typing import Any, Dict, List, Literal, Optional
 from mcp.server.stdio import stdio_server
 from pydantic import BaseModel, Field
 
+# Import centralized schemas from stackbench.schemas
+from stackbench.schemas import (
+    ClarityScore,
+    ScoreBreakdown,
+    ScoreExplanation,
+    ImprovementRoadmap,
+    PrioritizedFix,
+    TierRequirements,
+    ClarityIssue
+)
+
 
 # ============================================================================
 # RUBRIC DEFINITION
@@ -30,6 +46,7 @@ SCORING_RUBRIC = {
         "description": "Perfect - Production-ready documentation",
         "criteria": {
             "critical_issues": 0,
+            "failed_examples": 0,
             "max_warning_issues": 0,
             "max_info_issues": 2,
         },
@@ -39,8 +56,10 @@ SCORING_RUBRIC = {
         "description": "Excellent - Minor polish needed",
         "criteria": {
             "critical_issues": 0,
+            "failed_examples": 0,
             "max_warning_issues": 3,
         },
+        "constraint": "Score automatically capped at 7.9 if critical_issues > 0 or failed_examples > 0",
     },
     "6.0-7.9": {
         "tier": "B",
@@ -85,12 +104,8 @@ PENALTY_WEIGHTS = {
 
 
 # ============================================================================
-# INPUT SCHEMAS (import from centralized schemas)
+# INPUT SCHEMAS (imported from centralized schemas.py at top)
 # ============================================================================
-
-# Import centralized schema instead of redefining
-from stackbench.schemas import ClarityIssue
-
 
 # Map issue types to dimensions for scoring
 ISSUE_TYPE_TO_DIMENSION = {
@@ -145,83 +160,18 @@ class ContentMetrics(BaseModel):
 # ============================================================================
 # OUTPUT SCHEMAS
 # ============================================================================
+# Note: ClarityScore, ScoreBreakdown, ScoreExplanation, ImprovementRoadmap,
+# PrioritizedFix, and TierRequirements are now imported from stackbench.schemas
+# to avoid duplication and maintain a single source of truth.
 
 
 class DimensionScore(BaseModel):
-    """Score for a single clarity dimension."""
+    """Score for a single clarity dimension (MCP-internal only)."""
 
     dimension: str
     score: float = Field(ge=0.0, le=10.0)
     issues_count: Dict[str, int]  # {"critical": 2, "warning": 3, "info": 1}
     primary_issues: List[str]  # Top 3 issues affecting this dimension
-
-
-class ClarityScore(BaseModel):
-    """Overall clarity score with dimensional breakdown."""
-
-    overall_score: float = Field(ge=0.0, le=10.0)
-    tier: str  # S/A/B/C/D/F
-    instruction_clarity: float = Field(ge=0.0, le=10.0)
-    logical_flow: float = Field(ge=0.0, le=10.0)
-    completeness: float = Field(ge=0.0, le=10.0)
-    consistency: float = Field(ge=0.0, le=10.0)
-    prerequisite_coverage: float = Field(ge=0.0, le=10.0)
-
-
-class PrioritizedFix(BaseModel):
-    """A single improvement action."""
-
-    priority: Literal["critical", "high", "medium", "low"]
-    category: str
-    description: str
-    location: str
-    impact: Literal["high", "medium", "low"]
-    effort: Literal["low", "medium", "high"]
-    projected_score_change: float
-
-
-class ImprovementRoadmap(BaseModel):
-    """Prioritized list of improvements."""
-
-    current_overall_score: float
-    projected_score_after_critical_fixes: float
-    projected_score_after_all_fixes: float
-    prioritized_fixes: List[PrioritizedFix]
-    quick_wins: List[PrioritizedFix]  # High impact + low effort
-
-
-class ScoreBreakdown(BaseModel):
-    """Detailed score calculation breakdown."""
-
-    base_score: float = 10.0
-    critical_issues_penalty: float
-    warning_issues_penalty: float
-    info_issues_penalty: float
-    failed_examples_penalty: float
-    invalid_api_penalty: float
-    missing_api_penalty: float
-    final_score: float
-
-
-class TierRequirements(BaseModel):
-    """Requirements to reach next tier."""
-
-    current_tier: str
-    next_tier: Optional[str]
-    requirements_for_next_tier: Optional[Dict[str, Any]]
-    current_status: Dict[str, int]
-
-
-class ScoreExplanation(BaseModel):
-    """Human-readable score explanation."""
-
-    score: float
-    tier: str
-    tier_description: str
-    score_breakdown: ScoreBreakdown
-    tier_requirements: TierRequirements
-    primary_issues: List[Dict[str, Any]]
-    summary: str
 
 
 # ============================================================================
@@ -233,14 +183,18 @@ def calculate_score(
     issues: List[ClarityIssue], metrics: ContentMetrics
 ) -> tuple[float, ScoreBreakdown]:
     """
-    Calculate overall clarity score based on issues and content metrics.
+    Calculate penalty-based score and breakdown (for transparency/debugging).
+
+    NOTE: This function is now primarily used to generate the ScoreBreakdown
+    for transparency. The actual overall_score is calculated by averaging
+    dimension scores in the tool handler.
 
     Args:
         issues: List of issues detected by clarity agent
         metrics: Content quality metrics from validation agents
 
     Returns:
-        Tuple of (final_score, breakdown)
+        Tuple of (penalty_based_score, breakdown)
     """
     # Count issues by severity
     critical_count = sum(1 for i in issues if i.severity == "critical")
@@ -249,6 +203,7 @@ def calculate_score(
 
     # Calculate penalties
     breakdown = ScoreBreakdown(
+        base_score=10.0,  # Start with perfect score
         critical_issues_penalty=critical_count * PENALTY_WEIGHTS["critical_issue"],
         warning_issues_penalty=warning_count * PENALTY_WEIGHTS["warning_issue"],
         info_issues_penalty=info_count * PENALTY_WEIGHTS["info_issue"],
@@ -739,11 +694,7 @@ class ClarityScoringMCPServer:
                     issues = [ClarityIssue(**issue) for issue in issues_data]
                     metrics = ContentMetrics(**metrics_data)
 
-                    # Calculate overall score
-                    overall_score, breakdown = calculate_score(issues, metrics)
-                    tier, _ = get_tier(overall_score)
-
-                    # Calculate dimensional scores
+                    # Calculate dimensional scores FIRST
                     dimensions = [
                         "instruction_clarity",
                         "logical_flow",
@@ -756,6 +707,26 @@ class ClarityScoringMCPServer:
                     for dim in dimensions:
                         dim_score = calculate_dimension_score(dim, issues, metrics)
                         dimension_scores[dim] = dim_score.score
+
+                    # Calculate overall score as AVERAGE of dimension scores
+                    # This ensures overall score is consistent with dimensional performance
+                    overall_score = sum(dimension_scores.values()) / len(dimension_scores)
+                    overall_score = max(0.0, min(10.0, overall_score))  # Clamp to 0-10 range
+
+                    # TIER CONSTRAINT: Critical issues prevent S/A tiers
+                    critical_count = sum(1 for i in issues if i.severity == "critical")
+                    failed_examples_count = metrics.failed_examples
+
+                    if critical_count > 0 or failed_examples_count > 0:
+                        # Cap at 7.9 (max Tier B) if there are critical issues or failed examples
+                        overall_score = min(overall_score, 7.9)
+
+                    tier, _ = get_tier(overall_score)
+
+                    # Still generate breakdown for transparency (shows what penalties were applied)
+                    _, breakdown = calculate_score(issues, metrics)
+                    # Update breakdown's final_score to reflect the new calculation
+                    breakdown.final_score = overall_score
 
                     result = ClarityScore(
                         overall_score=overall_score,

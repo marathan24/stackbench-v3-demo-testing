@@ -9,9 +9,18 @@ Stackbench uses Claude Code agents to automatically validate documentation throu
 ### Core Validation Pipeline
 
 1. **Extraction** - Analyzes markdown documentation to extract API signatures and code examples
-2. **API Signature Validation** - Validates that documented function signatures match actual library implementations
-3. **Code Example Validation** - Tests that code examples actually run without errors
-4. **Clarity Validation** - LLM-as-judge system that evaluates documentation from a user experience perspective:
+2. **API Completeness & Deprecation** (3-Stage Pipeline with MCP!) - Analyzes documentation coverage:
+   - **Stage 1**: Library introspection via Bash (`pip install` + `python_introspect.py`) → `api_surface.json`
+   - **Stage 2**: Fast deterministic script scans ALL .md files (~2s), MCP scores APIs → `documented_apis.json` + `undocumented_apis.json`
+   - **Stage 3**: MCP calculates metrics and prioritizes → `completeness_analysis.json`
+   - **Performance**: ~7s for 118 APIs (5-10x faster than LLM matching)
+   - Identifies deprecated APIs still taught in documentation
+   - Ranks undocumented APIs by importance (0-10 scale based on heuristics)
+   - Output: 4 JSON files in `results/api_completeness/`
+3. **API Signature Validation** - Validates that documented function signatures match actual library implementations
+4. **Code Example Validation** - Tests that code examples actually run without errors
+5. **Clarity Validation** (with MCP!) - LLM-as-judge system that evaluates documentation from a user experience perspective:
+   - Uses MCP server for deterministic scoring calculations
    - Scores 5 dimensions on 0-10 scale (instruction clarity, logical flow, completeness, consistency, prerequisites)
    - Identifies unclear instructions, missing prerequisites, logical gaps, and broken links
    - Provides actionable suggestions with precise line numbers

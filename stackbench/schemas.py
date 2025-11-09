@@ -6,7 +6,7 @@ extraction, validation, and analysis agents. All schemas are defined here
 to avoid duplication and ensure consistency.
 """
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Dict, Any, Optional
 
 
@@ -38,6 +38,14 @@ class APISignature(BaseModel):
     markdown_anchor: Optional[str] = Field(None, description="Markdown heading anchor/ID, e.g., '#from-polars-dataframe'")
     code_block_index: int = Field(default=0, description="Index of code block within the section (0, 1, 2...)")
 
+    @field_validator('method_chain', mode='before')
+    @classmethod
+    def convert_method_chain_list_to_string(cls, v):
+        """Convert list of method names to dot-separated string (handles agent mistakes)."""
+        if isinstance(v, list):
+            return '.'.join(v) if v else None
+        return v
+
 
 class CodeExample(BaseModel):
     """Represents a code example found in documentation."""
@@ -46,7 +54,16 @@ class CodeExample(BaseModel):
     code: str = Field(description="Complete code example")
     imports: Optional[str] = Field(None, description="All import statements")
     has_main: bool = Field(description="Whether example has a main/entry point")
-    is_executable: bool = Field(description="Whether example can run standalone")
+    is_executable: bool = Field(description="Whether example can run standalone (DEPRECATED - use execution_context)")
+    execution_context: str = Field(
+        default="sync",
+        description=(
+            "Execution context required for this code: "
+            "'sync' = runs as-is in normal Python context, "
+            "'async' = contains async/await and needs async context, "
+            "'not_executable' = incomplete snippet or pseudocode"
+        )
+    )
     line: int = Field(description="Approximate line number in document")
     context: str = Field(description="Section/heading this appears under")
     dependencies: List[str] = Field(default_factory=list, description="External dependencies needed")
@@ -197,7 +214,7 @@ class EnvironmentInfo(BaseModel):
     version_installed: str
     version_requested: str
     version_match: bool
-    python_version: str
+    runtime_version: str  # Python 3.x.y OR Node.js vX.Y.Z
     installation_output: Optional[str] = None
 
 
@@ -375,3 +392,125 @@ class ClarityValidationOutput(BaseModel):
     summary: ClaritySummary
     processing_time_ms: int
     warnings: List[str]
+
+
+# ============================================================================
+# API COMPLETENESS & DEPRECATION SCHEMAS
+# ============================================================================
+
+class APIMetadata(BaseModel):
+    """Metadata about a discovered API."""
+    api: str = Field(description="Full API identifier, e.g., 'lancedb.connect', 'Database.create_table'")
+    module: str = Field(description="Module path, e.g., 'lancedb', 'lancedb.db'")
+    type: str = Field(description="Type of API: 'function', 'class', 'method', 'property'")
+    is_async: bool = Field(default=False, description="Whether API is async")
+    has_docstring: bool = Field(default=False, description="Whether API has docstring")
+    in_all: bool = Field(default=False, description="Whether API is in module's __all__")
+    is_deprecated: bool = Field(default=False, description="Whether API is deprecated")
+    deprecation_message: Optional[str] = Field(None, description="Deprecation warning message if deprecated")
+    alternative_api: Optional[str] = Field(None, description="Suggested alternative API if deprecated")
+    deprecated_since: Optional[str] = Field(None, description="Version when deprecated")
+
+
+class UndocumentedAPI(BaseModel):
+    """An API that lacks documentation."""
+    api: str = Field(description="Full API identifier")
+    module: str = Field(description="Module path")
+    type: str = Field(description="API type: function/class/method/property")
+    importance: str = Field(description="Importance ranking: 'high', 'medium', 'low'")
+    importance_score: int = Field(description="Numeric importance score (0-10)")
+    reason: str = Field(description="Why this API is considered important")
+    has_docstring: bool = Field(description="Whether API has Python docstring")
+    is_async: bool = Field(default=False, description="Whether API is async")
+
+
+class DeprecatedInDocs(BaseModel):
+    """A deprecated API still taught in documentation."""
+    api: str = Field(description="Deprecated API identifier")
+    module: str = Field(description="Module path")
+    deprecated_since: Optional[str] = Field(None, description="Version when deprecated")
+    alternative: Optional[str] = Field(None, description="Suggested alternative API")
+    documented_in: List[str] = Field(default_factory=list, description="List of doc pages teaching this API")
+    severity: str = Field(description="'critical' if deprecated in target version, 'warning' otherwise")
+    deprecation_message: Optional[str] = Field(None, description="Full deprecation warning")
+    suggestion: str = Field(description="Actionable suggestion for fixing docs")
+
+
+class DocumentationReference(BaseModel):
+    """Rich reference to where an API appears in documentation."""
+    document: str = Field(description="Document filename, e.g., 'pandas_and_pyarrow.md'")
+    section_hierarchy: List[str] = Field(default_factory=list, description="Section path, e.g., ['Pandas and PyArrow', 'Create dataset']")
+    markdown_anchor: Optional[str] = Field(None, description="Markdown anchor, e.g., '#create-dataset'")
+    line_number: int = Field(description="Line number in the document")
+    context_type: str = Field(description="How API appears: 'signature', 'example', or 'mention'")
+    code_block_index: Optional[int] = Field(None, description="Index of code block in section (0-based)")
+    raw_context: str = Field(description="Human-readable context description")
+
+
+class APIDetail(BaseModel):
+    """Detailed coverage information for a single API."""
+    api: str = Field(description="Full API identifier")
+    module: str = Field(description="Module path")
+    type: str = Field(description="API type: function/class/method/property")
+    is_deprecated: bool = Field(default=False, description="Whether deprecated")
+    coverage_tier: int = Field(description="0=undocumented, 1=mentioned, 2=has_example, 3=dedicated_section")
+
+    # Rich documentation references (NEW)
+    documentation_references: List[DocumentationReference] = Field(
+        default_factory=list,
+        description="Detailed references to where this API is documented"
+    )
+
+    # Backward compatible fields (derived from documentation_references)
+    documented_in: List[str] = Field(default_factory=list, description="Pages that document this API")
+    has_examples: bool = Field(default=False, description="Whether API appears in code examples")
+    has_dedicated_section: bool = Field(default=False, description="Whether API has its own section")
+    importance: str = Field(description="Importance: high/medium/low")
+    importance_score: int = Field(description="Numeric importance score")
+
+
+class APISurfaceSummary(BaseModel):
+    """Summary of discovered library API surface."""
+    total_public_apis: int = Field(description="Total count of public APIs")
+    by_module: Dict[str, List[str]] = Field(default_factory=dict, description="APIs grouped by module")
+    by_type: Dict[str, int] = Field(default_factory=dict, description="Count by type: functions, classes, methods")
+    deprecated_count: int = Field(default=0, description="Count of deprecated APIs in library")
+
+
+class CoverageSummary(BaseModel):
+    """Summary of documentation coverage metrics."""
+    documented: int = Field(description="APIs with any documentation (tier >= 1)")
+    with_examples: int = Field(description="APIs with code examples (tier >= 2)")
+    with_dedicated_sections: int = Field(description="APIs with dedicated sections (tier == 3)")
+    undocumented: int = Field(description="APIs with no documentation (tier == 0)")
+    total_apis: int = Field(description="Total public APIs in library")
+    coverage_percentage: float = Field(description="Percentage of documented APIs")
+    example_coverage_percentage: float = Field(description="Percentage with examples")
+    complete_coverage_percentage: float = Field(description="Percentage with dedicated sections")
+
+
+class APICompletenessOutput(BaseModel):
+    """Complete API coverage and deprecation analysis output."""
+    analysis_id: str = Field(description="Unique analysis ID")
+    analyzed_at: str = Field(description="ISO timestamp")
+    library: str = Field(description="Library name")
+    version: str = Field(description="Library version")
+    language: str = Field(description="Programming language")
+
+    # API Surface
+    api_surface: APISurfaceSummary = Field(description="Discovered API surface")
+
+    # Coverage Metrics
+    coverage_summary: CoverageSummary = Field(description="Coverage statistics")
+
+    # Gaps and Issues
+    undocumented_apis: List[UndocumentedAPI] = Field(default_factory=list, description="APIs lacking documentation")
+    deprecated_in_docs: List[DeprecatedInDocs] = Field(default_factory=list, description="Deprecated APIs in docs")
+
+    # Detailed Information
+    api_details: List[APIDetail] = Field(default_factory=list, description="Per-API coverage details")
+
+    # Metadata
+    environment: EnvironmentInfo = Field(description="Environment information")
+    processing_time_ms: int = Field(description="Time taken for analysis")
+    warnings: List[str] = Field(default_factory=list, description="Any warnings or issues")

@@ -101,6 +101,7 @@ export function localFileSystemPlugin(): Plugin {
         if (req.url?.startsWith('/api/files?')) {
           const url = new URL(req.url, 'http://localhost');
           const dirPath = url.searchParams.get('path');
+          const type = url.searchParams.get('type'); // 'dirs' or 'files' (default: both)
 
           if (!dirPath) {
             res.statusCode = 400;
@@ -109,12 +110,35 @@ export function localFileSystemPlugin(): Plugin {
           }
 
           try {
-            const files = await fs.readdir(dirPath);
+            const entries = await fs.readdir(dirPath, { withFileTypes: true });
+
+            let results: string[];
+            if (type === 'dirs') {
+              // Only return directories (for run IDs in data directory)
+              results = entries
+                .filter(entry => entry.isDirectory())
+                .map(entry => entry.name);
+            } else if (type === 'files') {
+              // Only return files (for extraction results, etc.)
+              results = entries
+                .filter(entry => entry.isFile())
+                .map(entry => entry.name);
+            } else {
+              // Return both files and directories (default behavior for backward compatibility)
+              results = entries.map(entry => entry.name);
+            }
+
             res.setHeader('Content-Type', 'application/json');
-            res.end(JSON.stringify(files));
-          } catch (error) {
-            res.statusCode = 500;
-            res.end(JSON.stringify({ error: 'Failed to read directory' }));
+            res.end(JSON.stringify(results));
+          } catch (error: any) {
+            // If directory doesn't exist (ENOENT), return empty array instead of error
+            if (error.code === 'ENOENT') {
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify([]));
+            } else {
+              res.statusCode = 500;
+              res.end(JSON.stringify({ error: 'Failed to read directory' }));
+            }
           }
           return;
         }

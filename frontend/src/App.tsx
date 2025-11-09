@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { FileText, CheckCircle2, Search, Settings as SettingsIcon, ChevronLeft, ChevronRight, Code, Play, BookOpen, Route } from 'lucide-react';
+import { FileText, CheckCircle2, Search, Settings as SettingsIcon, ChevronLeft, ChevronRight, Code, Play, BookOpen, Route, PieChart } from 'lucide-react';
 import type {
   ExtractionOutput,
   ValidationOutput,
@@ -7,7 +7,8 @@ import type {
   CCCodeExampleValidationOutput,
   CCClarityValidationOutput,
   RunInfo as RunInfoType,
-  WalkthroughData
+  WalkthroughData,
+  APICompletenessOutput
 } from './types';
 import { apiService, configInitialized } from './services/api';
 import { Settings } from './components/Settings';
@@ -16,6 +17,7 @@ import { Tabs, TabPanel } from './components/Tabs';
 import { RunSelector } from './components/RunSelector';
 import { RunInfo } from './components/RunInfo';
 import { WalkthroughViewer } from './components/WalkthroughViewer';
+import { APICoverageViewer } from './components/APICoverageViewer';
 
 function App() {
   const [configReady, setConfigReady] = useState(false);
@@ -38,7 +40,9 @@ function App() {
   const [activeTab, setActiveTab] = useState('extraction');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [docPaneCollapsed, setDocPaneCollapsed] = useState(false);
-  const [viewMode, setViewMode] = useState<'documents' | 'walkthroughs'>('documents');
+  const [viewMode, setViewMode] = useState<'documents' | 'walkthroughs' | 'api-coverage'>('documents');
+  const [apiCompleteness, setApiCompleteness] = useState<APICompletenessOutput | null>(null);
+  const [showAllUndocumented, setShowAllUndocumented] = useState(false);
 
   // Wait for config to be initialized from backend
   useEffect(() => {
@@ -52,6 +56,7 @@ function App() {
     const params = new URLSearchParams(window.location.search);
     const docName = params.get('doc');
     const tab = params.get('tab');
+    const viewModeParam = params.get('viewMode');
 
     // If run ID in URL, we'll let RunSelector handle loading it
     // This is just for updating the doc and tab after the run loads
@@ -61,11 +66,15 @@ function App() {
     if (tab) {
       setActiveTab(tab);
     }
+    // Restore viewMode from URL, validate it's a valid value
+    if (viewModeParam && ['documents', 'walkthroughs', 'api-coverage'].includes(viewModeParam)) {
+      setViewMode(viewModeParam as 'documents' | 'walkthroughs' | 'api-coverage');
+    }
   }, []);
 
   // Update URL when selections change
   useEffect(() => {
-    if (selectedRun || selectedDoc || activeTab !== 'extraction') {
+    if (selectedRun || selectedDoc || activeTab !== 'extraction' || viewMode !== 'documents') {
       const params = new URLSearchParams();
       if (selectedRun) {
         params.set('run', selectedRun.run_id);
@@ -76,20 +85,32 @@ function App() {
       if (activeTab !== 'extraction') {
         params.set('tab', activeTab);
       }
+      // Always persist viewMode to URL
+      params.set('viewMode', viewMode);
       const newUrl = `${window.location.pathname}${params.toString() ? '?' + params.toString() : ''}`;
       window.history.replaceState({}, '', newUrl);
     }
-  }, [selectedRun, selectedDoc, activeTab]);
+  }, [selectedRun, selectedDoc, activeTab, viewMode]);
 
   // Load documentation files when run is selected
   useEffect(() => {
     if (selectedRun) {
       apiService.setRunId(selectedRun.run_id);
-      loadDocs();
-      loadWalkthroughs();
-      // Reset selected doc when run changes
+      // Reset state immediately to avoid showing stale data
+      setDocs([]);
+      setWalkthroughs([]);
+      setApiCompleteness(null);
       setSelectedDoc(null);
       setSelectedWalkthrough(null);
+      // Load new data
+      loadDocs();
+      loadWalkthroughs();
+      loadAPICompleteness();
+    } else {
+      // Clear everything if no run selected
+      setDocs([]);
+      setWalkthroughs([]);
+      setApiCompleteness(null);
     }
   }, [selectedRun]);
 
@@ -110,9 +131,14 @@ function App() {
   const loadDocs = async () => {
     try {
       const files = await apiService.getDocumentationFiles();
+      console.log(`✅ Loaded ${files.length} documentation files for run ${selectedRun?.run_id}`);
       setDocs(files);
+      if (files.length === 0) {
+        console.warn('⚠️ No extraction files found. Check that results/extraction/ directory exists and contains *_analysis.json files');
+      }
     } catch (error) {
-      console.error('Failed to load documentation files:', error);
+      console.error('❌ Failed to load documentation files:', error);
+      setDocs([]);
     }
   };
 
@@ -151,6 +177,16 @@ function App() {
       }
     } catch (error) {
       console.error('Failed to load walkthroughs:', error);
+    }
+  };
+
+  const loadAPICompleteness = async () => {
+    try {
+      const data = await apiService.getAPICompleteness();
+      setApiCompleteness(data);
+    } catch (error) {
+      console.error('Failed to load API completeness:', error);
+      setApiCompleteness(null);
     }
   };
 
@@ -294,7 +330,9 @@ function App() {
                 <p className="text-sm text-muted-foreground">
                   {viewMode === 'documents'
                     ? 'View documentation, extraction results, and validation'
-                    : 'View walkthrough tutorials and audit results'}
+                    : viewMode === 'walkthroughs'
+                    ? 'View walkthrough tutorials and audit results'
+                    : 'View API coverage analysis and completeness metrics'}
                 </p>
               </div>
 
@@ -302,10 +340,10 @@ function App() {
               <div className="flex items-center gap-1 p-1 bg-muted rounded-lg">
                 <button
                   onClick={() => setViewMode('documents')}
-                  className={`px-4 py-2 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${
+                  className={`px-4 py-2 rounded-md text-sm font-medium transition-all flex items-center gap-2 cursor-pointer ${
                     viewMode === 'documents'
                       ? 'bg-background shadow-sm text-foreground'
-                      : 'text-muted-foreground hover:text-foreground'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-background/50'
                   }`}
                 >
                   <FileText className="h-4 w-4" />
@@ -313,10 +351,10 @@ function App() {
                 </button>
                 <button
                   onClick={() => setViewMode('walkthroughs')}
-                  className={`px-4 py-2 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${
+                  className={`px-4 py-2 rounded-md text-sm font-medium transition-all flex items-center gap-2 cursor-pointer ${
                     viewMode === 'walkthroughs'
                       ? 'bg-background shadow-sm text-foreground'
-                      : 'text-muted-foreground hover:text-foreground'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-background/50'
                   }`}
                 >
                   <Route className="h-4 w-4" />
@@ -324,6 +362,22 @@ function App() {
                   {walkthroughs.length > 0 && (
                     <span className="px-1.5 py-0.5 rounded-full bg-primary text-primary-foreground text-xs">
                       {walkthroughs.length}
+                    </span>
+                  )}
+                </button>
+                <button
+                  onClick={() => setViewMode('api-coverage')}
+                  className={`px-4 py-2 rounded-md text-sm font-medium transition-all flex items-center gap-2 cursor-pointer ${
+                    viewMode === 'api-coverage'
+                      ? 'bg-background shadow-sm text-foreground'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-background/50'
+                  }`}
+                >
+                  <PieChart className="h-4 w-4" />
+                  API Coverage
+                  {apiCompleteness?.coverage_summary && (
+                    <span className="px-1.5 py-0.5 rounded-full bg-primary text-primary-foreground text-xs">
+                      {apiCompleteness.coverage_summary.coverage_percentage.toFixed(0)}%
                     </span>
                   )}
                 </button>
@@ -445,6 +499,117 @@ function App() {
                     </div>
                   )}
                 </div>
+              </div>
+            )}
+          </div>
+        ) : viewMode === 'api-coverage' ? (
+          /* API COVERAGE MODE */
+          <div className="flex-1 overflow-auto p-6">
+            {!apiCompleteness ? (
+              <div className="flex items-center justify-center h-full">
+                <div className="text-center">
+                  <PieChart className="h-16 w-16 mx-auto text-muted-foreground mb-4 opacity-50" />
+                  <h3 className="text-xl font-semibold mb-2">No API Coverage Data</h3>
+                  <p className="text-sm text-muted-foreground">
+                    API completeness analysis not available for this run
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="max-w-7xl mx-auto space-y-6">
+                {/* Header */}
+                <div>
+                  <h2 className="text-2xl font-bold mb-2">API Coverage Analysis</h2>
+                  <p className="text-muted-foreground">
+                    {apiCompleteness.library} v{apiCompleteness.version} • Analyzed {new Date(apiCompleteness.analyzed_at).toLocaleString()}
+                  </p>
+                </div>
+
+                {/* Coverage Summary Cards */}
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                  <div className="p-4 border border-border rounded-lg bg-card">
+                    <div className="text-sm text-muted-foreground mb-1">Coverage</div>
+                    <div className={`text-3xl font-bold ${
+                      apiCompleteness.coverage_summary.coverage_percentage >= 80 ? 'text-green-600' :
+                      apiCompleteness.coverage_summary.coverage_percentage >= 50 ? 'text-yellow-600' :
+                      'text-red-600'
+                    }`}>
+                      {apiCompleteness.coverage_summary.coverage_percentage.toFixed(1)}%
+                    </div>
+                    <div className="text-xs text-muted-foreground mt-1">
+                      {apiCompleteness.coverage_summary.documented}/{apiCompleteness.coverage_summary.total_apis} APIs
+                    </div>
+                  </div>
+
+                  <div className="p-4 border border-border rounded-lg bg-card">
+                    <div className="text-sm text-muted-foreground mb-1">With Examples</div>
+                    <div className="text-3xl font-bold text-blue-600">
+                      {apiCompleteness.coverage_summary.with_examples ?? 0}
+                    </div>
+                    <div className="text-xs text-muted-foreground mt-1">
+                      {(apiCompleteness.coverage_summary.example_coverage_percentage ?? 0).toFixed(1)}% have code examples
+                    </div>
+                  </div>
+
+                  <div className="p-4 border border-border rounded-lg bg-card">
+                    <div className="text-sm text-muted-foreground mb-1">Complete Docs</div>
+                    <div className="text-3xl font-bold text-purple-600">
+                      {apiCompleteness.coverage_summary.with_dedicated_sections ?? 0}
+                    </div>
+                    <div className="text-xs text-muted-foreground mt-1">
+                      {(apiCompleteness.coverage_summary.complete_coverage_percentage ?? 0).toFixed(1)}% with dedicated sections
+                    </div>
+                  </div>
+
+                  <div className="p-4 border border-border rounded-lg bg-card">
+                    <div className="text-sm text-muted-foreground mb-1">Undocumented</div>
+                    <div className="text-3xl font-bold text-orange-600">
+                      {apiCompleteness.coverage_summary.undocumented}
+                    </div>
+                    <div className="text-xs text-muted-foreground mt-1">
+                      {(Array.isArray(apiCompleteness.undocumented_apis)
+                        ? apiCompleteness.undocumented_apis.filter(api => api.importance === 'high').length
+                        : (apiCompleteness.undocumented_apis?.high_priority || []).length
+                      )} high priority
+                    </div>
+                  </div>
+                </div>
+
+                {/* Deprecated APIs Warning */}
+                {(apiCompleteness.deprecated_in_docs || []).length > 0 && (
+                  <div className="p-4 border border-red-200 dark:border-red-900 rounded-lg bg-red-50 dark:bg-red-950">
+                    <h3 className="text-lg font-semibold text-red-900 dark:text-red-100 mb-2">
+                      ⚠️ Deprecated APIs in Documentation
+                    </h3>
+                    <p className="text-sm text-red-800 dark:text-red-200 mb-3">
+                      Found {(apiCompleteness.deprecated_in_docs || []).length} deprecated API(s) still being taught in docs
+                    </p>
+                    <div className="space-y-2">
+                      {(apiCompleteness.deprecated_in_docs || []).map((dep, idx) => (
+                        <div key={idx} className="p-3 bg-white dark:bg-gray-900 rounded border border-red-200 dark:border-red-800">
+                          <code className="text-sm font-mono">{dep.api}</code>
+                          <p className="text-xs text-muted-foreground mt-1">{dep.suggestion}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Enhanced API Coverage Viewer */}
+                <APICoverageViewer
+                  apiCompleteness={apiCompleteness}
+                  onNavigateToDoc={(docName, lineNumber, anchor) => {
+                    // Switch to documents mode
+                    setViewMode('documents');
+                    // Select the document
+                    setSelectedDoc(docName);
+                    // Scroll to line after a brief delay to allow document to load
+                    setTimeout(() => {
+                      // Implementation would scroll to line/anchor in the MarkdownViewer
+                      // For now, just switching docs is a good start
+                    }, 200);
+                  }}
+                />
               </div>
             )}
           </div>
