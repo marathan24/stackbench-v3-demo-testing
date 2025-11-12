@@ -261,7 +261,7 @@ class StructuralIssue(BaseModel):
 
 
 class ClarityScore(BaseModel):
-    """Clarity scoring metrics."""
+    """Clarity scoring metrics with uncertainty quantification."""
     overall_score: float  # 0-10
     tier: str  # S/A/B/C/D/F
     instruction_clarity: float
@@ -269,6 +269,12 @@ class ClarityScore(BaseModel):
     completeness: float
     consistency: float
     prerequisite_coverage: float
+
+    # Uncertainty quantification (Phase 1 - Evaluation improvements)
+    confidence_interval_lower: Optional[float] = Field(None, description="Lower bound of 95% confidence interval")
+    confidence_interval_upper: Optional[float] = Field(None, description="Upper bound of 95% confidence interval")
+    score_std_dev: Optional[float] = Field(None, description="Standard deviation of score across multiple evaluations")
+    num_samples: Optional[int] = Field(None, description="Number of evaluation samples used for uncertainty estimation")
 
 
 class BrokenLink(BaseModel):
